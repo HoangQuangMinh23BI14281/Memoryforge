@@ -1,0 +1,59 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --extra dev --extra benchmark
+      - name: Lint
+        run: uv run ruff check memoryforge tests benchmarks
+      - name: Type check
+        run: env PYTHONDONTWRITEBYTECODE=1 uv run mypy memoryforge
+      - name: Test
+        run: >
+          env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.
+          uv run pytest
+          --cov=memoryforge
+          --cov-report=term-missing
+          --cov-fail-under=77
+      - name: Build distributions
+        run: uv build
+      - name: Check distributions
+        run: uv run twine check dist/*
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: memoryforge-dist
+          path: dist/*
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: pypi
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: memoryforge-dist
+          path: dist
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

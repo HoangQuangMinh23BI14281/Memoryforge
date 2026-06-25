@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "memoryforge": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        ".",
+        "run",
+        "memoryforge-mcp"
+      ],
+      "env": {
+        "MEMORYFORGE_DB": "~/.memoryforge/memory.db"
+      }
+    }
+  }
+}
