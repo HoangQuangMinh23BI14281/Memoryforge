@@ -30,6 +30,7 @@ jobs:
       - name: Test
         run: >
           env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.
+          MEMORYFORGE_SUBAGENT_RUNNER=mock
           uv run pytest
           --cov=memoryforge
           --cov-report=term-missing

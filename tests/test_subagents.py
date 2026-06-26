@@ -56,6 +56,7 @@ def test_auto_runner_does_not_use_codex_default_model(monkeypatch, tmp_path):
     monkeypatch.delenv("MEMORYFORGE_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     monkeypatch.delenv("MEMORYFORGE_SUBAGENT_CMD", raising=False)
+    monkeypatch.delenv("MEMORYFORGE_SUBAGENT_RUNNER", raising=False)
     monkeypatch.setattr(
         "memoryforge.agents.subagents.shutil.which",
         lambda name: "/usr/bin/codex" if name == "codex" else None,
@@ -69,6 +70,7 @@ def test_auto_runner_uses_codex_when_model_is_explicit(monkeypatch, tmp_path):
     _empty_codex_home(monkeypatch, tmp_path)
     monkeypatch.setenv("MEMORYFORGE_MODEL", "gpt-5.2")
     monkeypatch.delenv("MEMORYFORGE_SUBAGENT_CMD", raising=False)
+    monkeypatch.delenv("MEMORYFORGE_SUBAGENT_RUNNER", raising=False)
     monkeypatch.setattr(
         "memoryforge.agents.subagents.shutil.which",
         lambda name: "/usr/bin/codex" if name == "codex" else None,
@@ -202,6 +204,7 @@ def test_auto_runner_ignores_openai_base_url_and_uses_codex(monkeypatch, tmp_pat
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("MEMORYFORGE_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("MEMORYFORGE_SUBAGENT_CMD", raising=False)
+    monkeypatch.delenv("MEMORYFORGE_SUBAGENT_RUNNER", raising=False)
     monkeypatch.setattr(
         "memoryforge.agents.subagents.shutil.which",
         lambda name: "/usr/bin/codex" if name == "codex" else None,
@@ -253,6 +256,7 @@ def test_auto_runner_uses_project_codex_runner_without_cli_args(monkeypatch, tmp
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("MEMORYFORGE_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("MEMORYFORGE_SUBAGENT_CMD", raising=False)
+    monkeypatch.delenv("MEMORYFORGE_SUBAGENT_RUNNER", raising=False)
     monkeypatch.setattr(
         "memoryforge.agents.subagents.shutil.which",
         lambda name: "/usr/bin/codex" if name == "codex" else None,
