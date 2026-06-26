@@ -91,9 +91,12 @@ class ContextBuilder:
         """Build context from the ordered context-state snapshot."""
 
         messages: list[LLMMessage] = []
-        system_tokens = self.estimator.estimate(system_prompt) if system_prompt else 0
-        if system_prompt:
-            messages.append(LLMMessage("system", system_prompt, "system", "system"))
+        system_message, system_tokens, system_truncated = self._render_system_message(
+            system_prompt,
+            max_tokens=budget.hard_limit,
+        )
+        if system_message is not None:
+            messages.append(system_message)
 
         summary_node_ids = [
             item_id for item_type, item_id in context_items if item_type == "summary"
@@ -101,18 +104,15 @@ class ContextBuilder:
         summary_nodes_list = [
             node for node_id in summary_node_ids if (node := self.dag.get_node(node_id))
         ]
-        summary_nodes = {node.id: node for node in summary_nodes_list}
+        summary_messages, summary_tokens_total, summary_truncated = self._render_summary_nodes(
+            summary_nodes_list,
+            max_tokens=max(0, budget.hard_limit - system_tokens),
+        )
+        summary_messages_by_id = {message.source_id: message for message in summary_messages}
 
-        summary_tokens_total = 0
-        for node in summary_nodes_list:
-            full_content = f"[LCM summary node {node.id}]\n{node.content}"
-            summary_tokens_total += self.estimator.estimate_cached(
-                full_content, f"summary:{node.id}"
-            )
-
-        message_overhead = len(summary_nodes_list) * 5
+        message_overhead = len(summary_messages) * 5
         available_for_raw = max(
-            1,
+            0,
             budget.hard_limit - system_tokens - summary_tokens_total - message_overhead,
         )
         message_ids = [item_id for item_type, item_id in context_items if item_type == "message"]
@@ -125,16 +125,9 @@ class ContextBuilder:
 
         for item_type, item_id in context_items:
             if item_type == "summary":
-                node = summary_nodes.get(item_id)
-                if node is not None:
-                    messages.append(
-                        LLMMessage(
-                            "assistant",
-                            f"[LCM summary node {node.id}]\n{node.content}",
-                            "summary",
-                            node.id,
-                        )
-                    )
+                selected_summary = summary_messages_by_id.get(item_id)
+                if selected_summary is not None:
+                    messages.append(selected_summary)
             elif item_type == "message":
                 selected = selected_by_id.get(item_id)
                 if selected is not None:
@@ -148,9 +141,9 @@ class ContextBuilder:
             + raw_tokens_with_overhead
             + message_overhead,
             budget=budget,
-            has_summary=bool(summary_nodes),
-            truncated=truncated,
-            summary_node_ids=[node.id for node in summary_nodes.values()],
+            has_summary=bool(summary_messages),
+            truncated=system_truncated or summary_truncated or truncated,
+            summary_node_ids=[message.source_id for message in summary_messages],
             raw_message_ids=[
                 message.source_id for message in selected_tail if message.source == "message"
             ],
@@ -174,26 +167,26 @@ class ContextBuilder:
         raw_tail = raw_messages[covered_until + 1 :] if covered_until >= 0 else raw_messages
 
         messages: list[LLMMessage] = []
-        summary_tokens = 0
-        if system_prompt:
-            system_tokens = self.estimator.estimate(system_prompt)
-            messages.append(LLMMessage("system", system_prompt, "system", "system"))
-        else:
-            system_tokens = 0
+        system_message, system_tokens, system_truncated = self._render_system_message(
+            system_prompt,
+            max_tokens=budget.hard_limit,
+        )
+        if system_message is not None:
+            messages.append(system_message)
 
-        for node in active_summaries:
-            text = f"[LCM summary node {node.id}]\n{node.content}"
-            token_count = self.estimator.estimate_cached(text, f"summary:{node.id}")
-            summary_tokens += token_count
-            messages.append(LLMMessage("assistant", text, "summary", node.id))
+        summary_messages, summary_tokens, summary_truncated = self._render_summary_nodes(
+            active_summaries,
+            max_tokens=max(0, budget.hard_limit - system_tokens),
+        )
+        messages.extend(summary_messages)
 
         # Add message formatting overhead for summaries
-        summary_formatting_overhead = len(active_summaries) * 5
+        summary_formatting_overhead = len(summary_messages) * 5
 
         base_tokens = system_tokens + summary_tokens + summary_formatting_overhead
         selected_tail, raw_tokens, truncated = self._select_raw_tail(
             raw_tail,
-            max_tokens=max(1, budget.hard_limit - base_tokens),
+            max_tokens=max(0, budget.hard_limit - base_tokens),
         )
         messages.extend(selected_tail)
 
@@ -203,15 +196,60 @@ class ContextBuilder:
             messages=messages,
             token_estimate=base_tokens + raw_tokens_with_overhead,
             budget=budget,
-            has_summary=bool(active_summaries),
-            truncated=truncated,
-            summary_node_ids=[node.id for node in active_summaries],
+            has_summary=bool(summary_messages),
+            truncated=system_truncated or summary_truncated or truncated,
+            summary_node_ids=[message.source_id for message in summary_messages],
             raw_message_ids=[
                 message.source_id for message in selected_tail if message.source == "message"
             ],
             summary_tokens=summary_tokens,
             raw_tokens=raw_tokens,
         )
+
+    def _render_system_message(
+        self,
+        system_prompt: str,
+        *,
+        max_tokens: int,
+    ) -> tuple[LLMMessage | None, int, bool]:
+        if not system_prompt:
+            return None, 0, False
+        message = LLMMessage("system", system_prompt, "system", "system")
+        token_count = self.estimator.estimate(message.content)
+        if token_count <= max_tokens:
+            return message, token_count, False
+        fitted, fitted_tokens = self._fit_message_to_budget(message, max_tokens=max_tokens)
+        return fitted, fitted_tokens, True
+
+    def _render_summary_nodes(
+        self,
+        nodes: list[SummaryNode],
+        *,
+        max_tokens: int,
+    ) -> tuple[list[LLMMessage], int, bool]:
+        rendered: list[LLMMessage] = []
+        content_tokens = 0
+        context_used = 0
+        truncated = False
+        for node in nodes:
+            full_content = f"[LCM summary node {node.id}]\n{node.content}"
+            token_count = self.estimator.estimate_cached(full_content, f"summary:{node.id}")
+            context_cost = token_count + 5
+            remaining = max_tokens - context_used
+            if context_cost > remaining:
+                truncated = True
+                fitted, fitted_tokens = self._fit_message_to_budget(
+                    LLMMessage("assistant", full_content, "summary", node.id),
+                    max_tokens=remaining - 5,
+                )
+                if fitted is not None:
+                    rendered.append(fitted)
+                    content_tokens += fitted_tokens
+                break
+            rendered.append(LLMMessage("assistant", full_content, "summary", node.id))
+            content_tokens += token_count
+            context_used += context_cost
+        return rendered, content_tokens, truncated or len(rendered) < len(nodes)
 
     def _select_raw_tail(
         self,
@@ -220,23 +258,65 @@ class ContextBuilder:
         max_tokens: int,
     ) -> tuple[list[LLMMessage], int, bool]:
         selected: list[tuple[LLMMessage, int]] = []
-        used = 0
+        raw_used = 0
+        context_used = 0
         truncated = False
         for message in reversed(raw_messages):
             rendered = self._render_message(message)
             token_count = self.estimator.estimate(rendered.content)
-            if selected and used + token_count > max_tokens:
+            context_cost = token_count + 5
+            if context_cost > max_tokens:
+                truncated = True
+                if not selected:
+                    fitted, fitted_tokens = self._fit_message_to_budget(
+                        rendered,
+                        max_tokens=max_tokens - 5,
+                    )
+                    if fitted is not None:
+                        selected.append((fitted, fitted_tokens))
+                        raw_used += fitted_tokens
+                break
+            if selected and context_used + context_cost > max_tokens:
                 truncated = True
                 break
-            if not selected and token_count > max_tokens:
-                truncated = True
             selected.append((rendered, token_count))
-            used += token_count
-            if used >= max_tokens:
+            raw_used += token_count
+            context_used += context_cost
+            if context_used >= max_tokens:
                 truncated = len(selected) < len(raw_messages)
                 break
         selected.reverse()
-        return [item[0] for item in selected], used, truncated or len(selected) < len(raw_messages)
+        return (
+            [item[0] for item in selected],
+            raw_used,
+            truncated or len(selected) < len(raw_messages),
+        )
+
+    def _fit_message_to_budget(
+        self,
+        message: LLMMessage,
+        *,
+        max_tokens: int,
+    ) -> tuple[LLMMessage | None, int]:
+        if max_tokens <= 0:
+            return None, 0
+        label = "raw message" if message.source == "message" else message.source
+        marker = f"\n\n[LCM {label} truncated for context budget; source_id={message.source_id}]"
+        marker_tokens = self.estimator.estimate(marker)
+        if marker_tokens > max_tokens:
+            return None, 0
+        max_content_tokens = max(0, max_tokens - marker_tokens)
+        max_chars = max_content_tokens * 4
+        content = message.content[:max_chars].rstrip() if max_chars else ""
+        fitted_content = f"{content}{marker}" if content else marker.strip()
+        while fitted_content and self.estimator.estimate(fitted_content) > max_tokens:
+            if content:
+                content = content[:-16].rstrip()
+                fitted_content = f"{content}{marker}" if content else marker.strip()
+            else:
+                return None, 0
+        fitted = LLMMessage(message.role, fitted_content, message.source, message.source_id)
+        return fitted, self.estimator.estimate(fitted.content)
 
     def _render_message(self, message: StoredMessage) -> LLMMessage:
         parts = [self._render_part(part) for part in message.parts]

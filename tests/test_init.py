@@ -6,12 +6,17 @@ from memoryforge import MemoryForge
 from memoryforge.init import handle_hook_event, init_project
 
 
+def _isolate_home(monkeypatch, home):
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
 def test_init_writes_agent_configs(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
+    _isolate_home(monkeypatch, home)
     (project / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
     (project / "README.md").write_text("Long project notes", encoding="utf-8")
     src = project / "src"
@@ -34,14 +39,23 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
     assert memoryforge_config["subagent"]["model"] == "gpt-5.4"
     hooks = json.loads((project / ".codex" / "hooks.json").read_text(encoding="utf-8"))
     assert set(hooks["hooks"]) == {"SessionStart", "UserPromptSubmit", "PreCompact", "Stop"}
-    assert "memoryforge-hook.sh user-prompt-submit" in json.dumps(
-        hooks["hooks"]["UserPromptSubmit"]
+    user_prompt_commands = [
+        handler["command"]
+        for group in hooks["hooks"]["UserPromptSubmit"]
+        for handler in group.get("hooks", [])
+    ]
+    assert any(
+        "memoryforge-hook.sh" in command and " user-prompt-submit " in f" {command} "
+        for command in user_prompt_commands
     )
 
 
-def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path):
+def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _isolate_home(monkeypatch, home)
     (project / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
     codex_dir = project / ".codex"
     codex_dir.mkdir()
@@ -72,7 +86,14 @@ def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path):
     hooks = json.loads((codex_dir / "hooks.json").read_text(encoding="utf-8"))["hooks"]
     stop_commands = json.dumps(hooks["Stop"])
     assert "echo keep" in stop_commands
-    assert stop_commands.count("memoryforge-hook.sh stop") == 1
+    memoryforge_stop_hooks = [
+        handler["command"]
+        for group in hooks["Stop"]
+        for handler in group.get("hooks", [])
+        if "memoryforge-hook.sh" in handler.get("command", "")
+        and " stop " in f" {handler.get('command', '')} "
+    ]
+    assert len(memoryforge_stop_hooks) == 1
     assert "SessionEnd" not in hooks
 
 

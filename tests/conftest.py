@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -35,20 +36,15 @@ def real_data_text(real_data_excerpt: Path) -> str:
 
 @pytest.fixture
 def real_runner_args() -> dict[str, object]:
-    if os.environ.get("MEMORYFORGE_REAL_SUBAGENT") != "1":
-        pytest.skip("Set MEMORYFORGE_REAL_SUBAGENT=1 to run model-backed sub-agent tests")
-    runner = os.environ.get("MEMORYFORGE_SUBAGENT_RUNNER", "openai").lower()
-    if runner == "mock":
-        pytest.fail("Real tests must not use MEMORYFORGE_SUBAGENT_RUNNER=mock")
+    runner = os.environ.get("MEMORYFORGE_SUBAGENT_RUNNER", "codex").lower()
+    if runner != "codex":
+        pytest.fail("Real sub-agent tests must use MEMORYFORGE_SUBAGENT_RUNNER=codex")
+    if shutil.which("codex") is None:
+        pytest.fail("Real Codex sub-agent tests require Codex CLI on PATH")
     model = os.environ.get("MEMORYFORGE_MODEL") or os.environ.get("OPENAI_MODEL")
     if not model:
-        pytest.skip("Set MEMORYFORGE_MODEL or OPENAI_MODEL for real model-backed tests")
+        pytest.fail("Set MEMORYFORGE_MODEL or OPENAI_MODEL for real Codex sub-agent tests")
     base_url = os.environ.get("MEMORYFORGE_OPENAI_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
-    api_key = os.environ.get("MEMORYFORGE_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    if runner == "openai" and not api_key and not base_url:
-        pytest.skip(
-            "Set OPENAI_API_KEY, MEMORYFORGE_OPENAI_API_KEY, or an OpenAI-compatible base URL"
-        )
     return {
         "runner": runner,
         "model": model,

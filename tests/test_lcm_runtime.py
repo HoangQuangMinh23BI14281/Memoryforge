@@ -80,6 +80,95 @@ def test_context_builder_uses_summary_without_deleting_raw(tmp_path):
         dag.close()
 
 
+def test_context_builder_truncates_oversized_system_prompt_to_hard_limit(tmp_path):
+    db_path = str(tmp_path / "memory.db")
+    store = ImmutableMessageStore(db_path)
+    dag = SummaryDAG(db_path)
+    try:
+        store.append_text_message("agent", "session", "user", "small message")
+
+        context = ContextBuilder(store, dag).build(
+            "session",
+            system_prompt="system rule " * 300,
+            budget=ContextBudget(
+                model_context_limit=240,
+                reserved_output_tokens=80,
+                compaction_buffer=40,
+            ),
+        )
+
+        assert context.token_estimate <= context.budget.hard_limit
+        assert context.truncated is True
+        assert context.messages[0].source == "system"
+        assert "LCM system truncated for context budget" in context.messages[0].content
+    finally:
+        store.close()
+        dag.close()
+
+
+def test_context_builder_truncates_oversized_newest_message_to_hard_limit(tmp_path):
+    db_path = str(tmp_path / "memory.db")
+    store = ImmutableMessageStore(db_path)
+    dag = SummaryDAG(db_path)
+    try:
+        huge_text = "oversized newest message " * 300
+        message_id = store.append_text_message("agent", "session", "user", huge_text)
+
+        context = ContextBuilder(store, dag).build(
+            "session",
+            budget=ContextBudget(
+                model_context_limit=220,
+                reserved_output_tokens=80,
+                compaction_buffer=40,
+            ),
+        )
+
+        assert context.token_estimate <= context.budget.hard_limit
+        assert context.truncated is True
+        assert context.raw_message_ids == [message_id]
+        assert "LCM raw message truncated for context budget" in context.messages[-1].content
+        assert store.get_message(message_id).content == huge_text
+    finally:
+        store.close()
+        dag.close()
+
+
+def test_context_builder_truncates_oversized_summary_to_hard_limit(tmp_path):
+    db_path = str(tmp_path / "memory.db")
+    store = ImmutableMessageStore(db_path)
+    dag = SummaryDAG(db_path)
+    try:
+        old_message_id = store.append_text_message("agent", "session", "user", "old raw detail")
+        summary_id = dag.create_leaf(
+            "session",
+            "oversized summary detail " * 300,
+            old_message_id,
+            old_message_id,
+        )
+        store.swap_context_items("session", [old_message_id], summary_id)
+
+        context = ContextBuilder(store, dag).build(
+            "session",
+            budget=ContextBudget(
+                model_context_limit=260,
+                reserved_output_tokens=80,
+                compaction_buffer=40,
+            ),
+        )
+        stored_node = dag.get_node(summary_id)
+
+        assert context.token_estimate <= context.budget.hard_limit
+        assert context.has_summary is True
+        assert context.truncated is True
+        assert context.summary_node_ids == [summary_id]
+        assert "LCM summary truncated for context budget" in context.messages[-1].content
+        assert stored_node is not None
+        assert "oversized summary detail" in stored_node.content
+    finally:
+        store.close()
+        dag.close()
+
+
 def test_lcm_session_root_is_separate_from_context_items_view(tmp_path):
     db_path = str(tmp_path / "memory.db")
     store = ImmutableMessageStore(db_path)
@@ -372,6 +461,28 @@ def test_lcm_defer_soft_still_compacts_hard_overflow(tmp_path):
         engine.close()
 
 
+def test_lcm_compaction_candidates_keep_recent_user_turns(tmp_path):
+    db_path = str(tmp_path / "memory.db")
+    store = ImmutableMessageStore(db_path)
+    dag = SummaryDAG(db_path)
+    engine = LCMCompactionEngine(db_path, store=store, dag=dag, compactor=ShortCompactor())
+    try:
+        ids = [
+            store.append_text_message("agent", "session", "user", "old user request"),
+            store.append_text_message("agent", "session", "assistant", "old assistant answer"),
+            store.append_text_message("agent", "session", "user", "recent user request one"),
+            store.append_text_message("agent", "session", "assistant", "assistant response one"),
+            store.append_text_message("agent", "session", "user", "recent user request two"),
+            store.append_text_message("agent", "session", "assistant", "assistant response two"),
+        ]
+
+        candidates = engine._compaction_candidates("session", keep_recent_messages=2)
+
+        assert [message.id for message in candidates] == ids[:2]
+    finally:
+        engine.close()
+
+
 def test_lcm_compaction_reuses_input_hash_cache_without_worker_call(tmp_path):
     db_path = str(tmp_path / "memory.db")
     mf = MemoryForge(db_path)
@@ -402,7 +513,9 @@ def test_lcm_compaction_reuses_input_hash_cache_without_worker_call(tmp_path):
         )
         raw_messages = engine.store.get_messages("session", include_summaries=False)
         with engine.store.conn:
-            engine.store.conn.execute("DELETE FROM context_items WHERE session_id = ?", ("session",))
+            engine.store.conn.execute(
+                "DELETE FROM context_items WHERE session_id = ?", ("session",)
+            )
             for position, message in enumerate(raw_messages, start=1):
                 engine.store.conn.execute(
                     """
@@ -430,9 +543,9 @@ def test_lcm_compaction_reuses_input_hash_cache_without_worker_call(tmp_path):
             max_rounds=1,
             keep_recent_messages=2,
         )
-        after_node_count = (
-            cached_engine.dag.conn.execute("SELECT COUNT(*) FROM summary_nodes").fetchone()[0]
-        )
+        after_node_count = cached_engine.dag.conn.execute(
+            "SELECT COUNT(*) FROM summary_nodes"
+        ).fetchone()[0]
         cached_node = cached_engine.dag.get_node(second.summary_node_ids[0])
 
         assert second.cached is True
@@ -468,6 +581,43 @@ def test_lcm_compaction_reuses_input_hash_cache_without_worker_call(tmp_path):
         )
     finally:
         mf.close()
+
+
+def test_lcm_compaction_cache_ignores_condensed_node_with_inherited_input_ref(tmp_path):
+    db_path = str(tmp_path / "memory.db")
+    store = ImmutableMessageStore(db_path)
+    dag = SummaryDAG(db_path)
+    compactor = ShortCompactor()
+    engine = LCMCompactionEngine(db_path, store=store, dag=dag, compactor=compactor)
+    try:
+        message_ids = [
+            store.append_text_message("agent", "session", "user", f"message {index} cached input")
+            for index in range(3)
+        ]
+        messages = store.get_messages_by_ids(message_ids[:2])
+        input_ref = engine._compaction_input_ref(messages)
+        leaf_id = dag.create_leaf(
+            "session",
+            "leaf summary for exact original input",
+            messages[0].id,
+            messages[-1].id,
+            source_refs=[input_ref],
+        )
+        condensed_id = dag.condense(
+            [leaf_id], "condensed summary that inherited the leaf input ref"
+        )
+        condensed = dag.get_node(condensed_id)
+
+        assert condensed is not None
+        assert condensed.kind == "condensed"
+
+        result = engine._summarize_messages("agent", "session", messages)
+
+        assert result is not None
+        assert result.cached is False
+        assert compactor.calls == 1
+    finally:
+        engine.close()
 
 
 def test_lcm_compact_due_skips_soft_overflow_when_hard_only(tmp_path):
@@ -575,10 +725,7 @@ def test_lcm_compaction_skips_context_expanding_summary(tmp_path):
     try:
         mf.store_conversation(
             "agent",
-            [
-                {"role": "user", "content": f"short message {index}"}
-                for index in range(4)
-            ],
+            [{"role": "user", "content": f"short message {index}"} for index in range(4)],
             session_id="session",
         )
     finally:

@@ -27,6 +27,10 @@ from memoryforge.memory.longterm.models import LongTermRecallResult, MetadataFie
 from memoryforge.memory.longterm.retrieval import _recall_text
 
 
+def _use_mock_subagent(monkeypatch):
+    monkeypatch.setenv("MEMORYFORGE_SUBAGENT_RUNNER", "mock")
+
+
 def test_longmemeval_core_answer_cleaning_and_normalized_exact_match():
     assert (
         _clean_core_answer("<think>hidden reasoning</think>\nYou bought it downtown.")
@@ -136,7 +140,8 @@ def test_longmemeval_performance_summary_separates_answer_latency():
     assert summary["semantic_score_available"] is False
 
 
-def test_longmemeval_context_mode_reuses_unchanged_ingestion_indexes(tmp_path):
+def test_longmemeval_context_mode_reuses_unchanged_ingestion_indexes(tmp_path, monkeypatch):
+    _use_mock_subagent(monkeypatch)
     db_path = str(tmp_path / "memory.db")
     case = BenchmarkCase(
         case_id="case-1",
@@ -235,7 +240,8 @@ def test_longmemeval_context_mode_reuses_unchanged_ingestion_indexes(tmp_path):
         mf.close()
 
 
-def test_longmemeval_rlm_ingest_marks_answer_evidence_by_session_span(tmp_path):
+def test_longmemeval_rlm_ingest_marks_answer_evidence_by_session_span(tmp_path, monkeypatch):
+    _use_mock_subagent(monkeypatch)
     db_path = str(tmp_path / "memory.db")
     case = BenchmarkCase(
         case_id="case-evidence",
@@ -329,7 +335,8 @@ def test_longmemeval_rlm_ingest_marks_answer_evidence_by_session_span(tmp_path):
         mf.close()
 
 
-def test_longmemeval_core_answer_result_uses_core_runner_not_subagent_key(tmp_path):
+def test_longmemeval_core_answer_result_uses_core_runner_not_subagent_key(tmp_path, monkeypatch):
+    _use_mock_subagent(monkeypatch)
     class FakeCoreAnswerRunner:
         def execute(self, task):
             return SubAgentOperationResult(
@@ -380,7 +387,8 @@ def test_longmemeval_core_answer_result_uses_core_runner_not_subagent_key(tmp_pa
         mf.close()
 
 
-def test_longmemeval_context_only_special_probe_does_not_call_lcm_worker(tmp_path):
+def test_longmemeval_context_only_special_probe_does_not_call_lcm_worker(tmp_path, monkeypatch):
+    _use_mock_subagent(monkeypatch)
     db_path = str(tmp_path / "memory.db")
     case = BenchmarkCase(
         case_id="lcm-dag-probe-unit",

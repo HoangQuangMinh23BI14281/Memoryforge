@@ -691,6 +691,7 @@ def test_rlm_chunks_are_indexed_as_ltm_raw_refs(tmp_path):
             "Alice owns authentication.\n\nBob owns billing.\n\nCarol owns search.",
             name="ownership-notes",
             chunk_size=1000,
+            runner="mock",
         )
 
         hits = mf.recall_long_term("agent", "Alice authentication", top_k=5)
@@ -702,14 +703,15 @@ def test_rlm_chunks_are_indexed_as_ltm_raw_refs(tmp_path):
         mf.close()
 
 
-def test_rlm_does_not_duplicate_ltm_when_file_already_indexed(tmp_path):
+def test_rlm_does_not_duplicate_ltm_when_file_already_indexed(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORYFORGE_SUBAGENT_RUNNER", "mock")
     db_path = str(tmp_path / "memory.db")
     path = tmp_path / "notes.md"
     path.write_text("Alice owns authentication. Bob owns billing. " * 80, encoding="utf-8")
     mf = MemoryForge(db_path)
     try:
         file_ingest = mf.ingest_file("agent", path, chunk_size=1_000)
-        rlm_load = mf.rlm_load("agent", path, chunk_size=1_000)
+        rlm_load = mf.rlm_load("agent", path, chunk_size=1_000, runner="mock")
 
         counts = {
             row[0]: row[1]
@@ -738,7 +740,7 @@ def test_file_ingest_does_not_duplicate_ltm_when_rlm_already_indexed(tmp_path):
     path.write_text("Carol owns observability. Dana owns reliability. " * 80, encoding="utf-8")
     mf = MemoryForge(db_path)
     try:
-        rlm_load = mf.rlm_load("agent", path, chunk_size=1_000)
+        rlm_load = mf.rlm_load("agent", path, chunk_size=1_000, runner="mock")
         file_ingest = mf.ingest_file("agent", path, chunk_size=1_000)
 
         counts = {

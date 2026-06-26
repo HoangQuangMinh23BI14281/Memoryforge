@@ -1,24 +1,39 @@
 import os
+import shutil
 from pathlib import Path
-
-import pytest
 
 from memoryforge import MemoryForge
 from memoryforge.agents import SubAgentOperator, SubAgentTask
 from memoryforge.lcm import ContextBudget
 
 
-def _real_project_root() -> Path:
-    if os.environ.get("MEMORYFORGE_REAL_SUBAGENT") != "1":
-        pytest.skip("Set MEMORYFORGE_REAL_SUBAGENT=1 to run real model-backed sub-agent tests")
+def _real_codex_project_root() -> Path:
+    requested_runner = os.environ.get("MEMORYFORGE_SUBAGENT_RUNNER", "").lower()
+    if requested_runner and requested_runner != "codex":
+        raise AssertionError(
+            "Real sub-agent tests must use Codex CLI; unset MEMORYFORGE_SUBAGENT_RUNNER "
+            "or set it to codex."
+        )
+    if shutil.which("codex") is None:
+        raise AssertionError("Real sub-agent tests require Codex CLI on PATH")
+    model = (
+        os.environ.get("MEMORYFORGE_SUBAGENT_MODEL")
+        or os.environ.get("MEMORYFORGE_MODEL")
+        or os.environ.get("OPENAI_MODEL")
+    )
+    if not model:
+        raise AssertionError(
+            "Real Codex sub-agent tests require MEMORYFORGE_SUBAGENT_MODEL, "
+            "MEMORYFORGE_MODEL, or OPENAI_MODEL"
+        )
     root = Path(os.environ.get("MEMORYFORGE_REAL_PROJECT_ROOT", os.getcwd())).expanduser().resolve()
     if not root.exists():
         raise AssertionError(f"MEMORYFORGE_REAL_PROJECT_ROOT does not exist: {root}")
     return root
 
 
-def test_real_subagent_operator_calls_model():
-    project_root = _real_project_root()
+def test_real_subagent_operator_calls_codex_cli():
+    project_root = _real_codex_project_root()
     operator = SubAgentOperator(runner="codex", project_root=str(project_root), timeout_s=180)
 
     result = operator.execute(
@@ -31,12 +46,13 @@ def test_real_subagent_operator_calls_model():
         )
     )
 
-    assert result.provider != "mock"
+    assert result.provider == "codex"
+    assert result.model
     assert "MEMORYFORGE_REAL_OK" in result.text
 
 
-def test_real_lcm_compaction_uses_shared_model_operator(tmp_path):
-    project_root = _real_project_root()
+def test_real_lcm_compaction_uses_codex_cli_operator(tmp_path):
+    project_root = _real_codex_project_root()
     mf = MemoryForge(str(tmp_path / "memory.db"))
     try:
         session_id = "real-lcm-session"
@@ -81,8 +97,8 @@ def test_real_lcm_compaction_uses_shared_model_operator(tmp_path):
         mf.close()
 
 
-def test_real_rlm_run_uses_shared_model_operator(tmp_path):
-    project_root = _real_project_root()
+def test_real_rlm_run_uses_codex_cli_operator(tmp_path):
+    project_root = _real_codex_project_root()
     mf = MemoryForge(str(tmp_path / "memory.db"))
     try:
         result = mf.rlm_run(
@@ -97,7 +113,7 @@ def test_real_rlm_run_uses_shared_model_operator(tmp_path):
             synthesize=False,
         )
 
-        assert result["runner"] != "mock"
+        assert result["runner"] == "codex"
         assert len(result["records"]) == 1
         assert result["records"][0]["metadata"]["operation"] == "rlm.analyze"
         assert result["records"][0]["metadata"]["spawned"] is True

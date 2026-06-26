@@ -39,7 +39,7 @@ Rules:
 | LTM | `memoryforge/memory/longterm/...` | durable memory indexing and recall | No |
 | Vector | `memoryforge/search/vector.py` | embedding cache and local vector search | Embedding model only |
 | FTS | `memoryforge/search/fts.py` | lexical search index or fallback table | No |
-| Metadata policy | `memoryforge/memory/controller.py` | deterministic memory kind metadata | No |
+| Long-term memory metadata | `memoryforge/memory/longterm/models.py`, `indexing.py`, `retrieval.py` | durable memory metadata fields and local selection policy | No |
 
 Current debt: `RLMEngine` is still composed from mixins. That is an internal
 implementation detail, not a clean public boundary.

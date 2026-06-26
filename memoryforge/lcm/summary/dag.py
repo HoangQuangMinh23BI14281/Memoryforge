@@ -23,6 +23,7 @@ class SummaryNode:
     id: str
     session_id: str
     level: int
+    kind: str
     content: str
     span_start: str
     span_end: str
@@ -85,6 +86,7 @@ class SummaryDAG:
         )
         self._ensure_column("summary_nodes", "file_ids", "TEXT NOT NULL DEFAULT '[]'")
         self._ensure_column("summary_nodes", "source_refs", "TEXT NOT NULL DEFAULT '[]'")
+        self._ensure_column("summary_nodes", "kind", "TEXT NOT NULL DEFAULT 'leaf'")
         self.conn.commit()
 
     def _ensure_column(self, table: str, column: str, column_type: str) -> None:
@@ -150,7 +152,7 @@ class SummaryDAG:
         rows = self.conn.execute(
             f"""
             SELECT id, session_id, span_start_message_id, span_end_message_id, level,
-                   created_at, content, parent_node_ids, superseded, file_ids, source_refs
+                   created_at, content, parent_node_ids, superseded, file_ids, source_refs, kind
             FROM summary_nodes
             WHERE id IN ({placeholders})
             ORDER BY created_at
@@ -185,6 +187,7 @@ class SummaryDAG:
                     row[5],
                     row[9],
                     row[10],
+                    row[11],
                 )
             )
             for row in rows
@@ -246,7 +249,7 @@ class SummaryDAG:
             """
             SELECT id, session_id, level, content,
                    span_start_message_id, span_end_message_id,
-                   parent_node_ids, superseded, created_at, file_ids, source_refs
+                   parent_node_ids, superseded, created_at, file_ids, source_refs, kind
             FROM summary_nodes
             WHERE session_id = ? AND superseded = 0
             ORDER BY level DESC, created_at DESC
@@ -260,7 +263,7 @@ class SummaryDAG:
             """
             SELECT id, session_id, level, content,
                    span_start_message_id, span_end_message_id,
-                   parent_node_ids, superseded, created_at, file_ids, source_refs
+                   parent_node_ids, superseded, created_at, file_ids, source_refs, kind
             FROM summary_nodes
             WHERE id = ?
             """,
@@ -274,17 +277,29 @@ class SummaryDAG:
         source_ref: str,
         *,
         include_superseded: bool = True,
+        kind: str | None = None,
+        span_start: str | None = None,
+        span_end: str | None = None,
     ) -> SummaryNode | None:
         clauses = ["session_id = ?", "source_refs LIKE ?"]
         params: list[str | int] = [session_id, f"%{source_ref}%"]
         if not include_superseded:
             clauses.append("superseded = ?")
             params.append(0)
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if span_start is not None:
+            clauses.append("span_start_message_id = ?")
+            params.append(span_start)
+        if span_end is not None:
+            clauses.append("span_end_message_id = ?")
+            params.append(span_end)
         rows = self.conn.execute(
             f"""
             SELECT id, session_id, level, content,
                    span_start_message_id, span_end_message_id,
-                   parent_node_ids, superseded, created_at, file_ids, source_refs
+                   parent_node_ids, superseded, created_at, file_ids, source_refs, kind
             FROM summary_nodes
             WHERE {" AND ".join(clauses)}
             ORDER BY superseded ASC, created_at DESC
@@ -307,6 +322,7 @@ class SummaryDAG:
                 id=str(row[0]),
                 session_id=str(row[1]),
                 level=int(row[2]),
+                kind=str(row[11]) if len(row) > 11 and row[11] else "leaf",
                 content=str(row[3]),
                 span_start=str(row[4]),
                 span_end=str(row[5]),

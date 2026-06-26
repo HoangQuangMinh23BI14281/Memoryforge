@@ -11,6 +11,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: "."
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -24,18 +27,33 @@ jobs:
       - name: Lint
         run: uv run ruff check memoryforge tests benchmarks
       - name: Type check
-        run: env PYTHONDONTWRITEBYTECODE=1 uv run mypy memoryforge
-      - name: Test
+        run: uv run mypy memoryforge
+      - name: Test unit and integration suite
         run: >
-          env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.
           uv run pytest
+          --ignore=tests/test_real_subagents.py
           --cov=memoryforge
           --cov-report=term-missing
           --cov-fail-under=77
+      - name: Verify real Codex sub-agent runner
+        run: codex --version
+      - name: Test real Codex sub-agents
+        env:
+          MEMORYFORGE_REAL_SUBAGENT: "1"
+          MEMORYFORGE_REAL_PROJECT_ROOT: ${{ github.workspace }}
+          MEMORYFORGE_SUBAGENT_RUNNER: codex
+          MEMORYFORGE_MODEL: ${{ vars.MEMORYFORGE_REAL_MODEL || 'gpt-5.4' }}
+        run: uv run pytest tests/test_real_subagents.py -vv
       - name: Build distributions
         run: uv build
       - name: Check distributions
         run: uv run twine check dist/*
+      - name: Smoke installed wheel
+        run: |
+          python -m venv .tmp/wheel-smoke
+          .tmp/wheel-smoke/bin/python -m pip install dist/*.whl
+          .tmp/wheel-smoke/bin/python -c "import memoryforge; import memoryforge.mcp.server"
+          .tmp/wheel-smoke/bin/memoryforge --help
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:

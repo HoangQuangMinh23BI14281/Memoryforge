@@ -22,7 +22,7 @@ def test_rlm_load_search_chunk_get_dispatch(tmp_path):
 
     mf = MemoryForge(db_path)
     try:
-        loaded = mf.rlm_load("agent", source, name="notes", chunk_size=1_200, overlap=120)
+        loaded = mf.rlm_load("agent", source, name="notes", chunk_size=1_200, overlap=120, runner="mock")
         assert loaded["lossless"] is True
         assert loaded["chunk_count"] > 1
 
@@ -81,9 +81,9 @@ def test_rlm_load_skips_unchanged_source_and_reuses_indexes(tmp_path):
 
     mf = MemoryForge(db_path)
     try:
-        first = mf.rlm_load("agent", source, name="notes", chunk_size=1_200, overlap=120)
+        first = mf.rlm_load("agent", source, name="notes", chunk_size=1_200, overlap=120, runner="mock")
         first_counts = _table_counts(db_path)
-        second = mf.rlm_load("agent", source, name="notes", chunk_size=1_200, overlap=120)
+        second = mf.rlm_load("agent", source, name="notes", chunk_size=1_200, overlap=120, runner="mock")
         second_counts = _table_counts(db_path)
 
         assert first["deduped"] is False
@@ -108,8 +108,8 @@ def test_rlm_load_rechunks_when_chunk_config_changes(tmp_path):
 
     mf = MemoryForge(db_path)
     try:
-        first = mf.rlm_load("agent", source, name="notes", chunk_size=1_200, overlap=120)
-        second = mf.rlm_load("agent", source, name="notes", chunk_size=2_000, overlap=120)
+        first = mf.rlm_load("agent", source, name="notes", chunk_size=1_200, overlap=120, runner="mock")
+        second = mf.rlm_load("agent", source, name="notes", chunk_size=2_000, overlap=120, runner="mock")
 
         assert second["deduped"] is False
         assert second["buffer_id"] != first["buffer_id"]
@@ -124,6 +124,7 @@ def test_rlm_record_and_aggregate_preserve_lcm_dag_refs(tmp_path):
             "agent",
             "Alice owns authentication.\n\nBob owns billing.\n\nCarol owns observability.",
             chunk_size=1_000,
+            runner="mock",
         )
         plan = mf.rlm_dispatch("agent", buffer_id=loaded["buffer_id"], limit=10, batch_size=1)
         first_chunk = plan["batches"][0]["chunk_ids"][0]
@@ -498,7 +499,7 @@ def test_rlm_loads_python_file_as_lossless_document(tmp_path):
 
     mf = MemoryForge(str(tmp_path / "memory.db"))
     try:
-        loaded = mf.rlm_load("agent", path)
+        loaded = mf.rlm_load("agent", path, runner="mock")
         results = mf.rlm_search(
             "agent", "authenticate Alice", buffer_id=loaded["buffer_id"], limit=5
         )

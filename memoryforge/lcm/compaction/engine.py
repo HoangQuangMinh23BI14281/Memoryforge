@@ -363,17 +363,37 @@ class LCMCompactionEngine:
                 item_id for item_type, item_id in context_items if item_type == "message"
             ]
             messages = self.store.get_messages_by_ids(message_ids)
-            if keep_recent_messages and len(messages) > keep_recent_messages:
-                return messages[:-keep_recent_messages]
-            return []
+            return self._messages_before_recent_turns(
+                messages,
+                keep_recent_messages=keep_recent_messages,
+            )
 
         raw_messages = self.store.get_messages(session_id, include_summaries=False)
         active_summaries = self.dag.get_active_summaries(session_id)
         covered_until = ContextBuilder._latest_covered_index(raw_messages, active_summaries)
         uncovered = raw_messages[covered_until + 1 :] if covered_until >= 0 else raw_messages
-        if keep_recent_messages and len(uncovered) > keep_recent_messages:
-            return uncovered[:-keep_recent_messages]
-        return []
+        return self._messages_before_recent_turns(
+            uncovered,
+            keep_recent_messages=keep_recent_messages,
+        )
+
+    @staticmethod
+    def _messages_before_recent_turns(
+        messages: list[StoredMessage],
+        *,
+        keep_recent_messages: int,
+    ) -> list[StoredMessage]:
+        if keep_recent_messages <= 0:
+            return messages
+        if len(messages) <= keep_recent_messages:
+            return []
+        protected_start = len(messages) - keep_recent_messages
+        user_indexes = [index for index, message in enumerate(messages) if message.role == "user"]
+        if len(user_indexes) >= keep_recent_messages:
+            protected_start = min(protected_start, user_indexes[-keep_recent_messages])
+        if protected_start <= 0:
+            return []
+        return messages[:protected_start]
 
     def _summarize_messages(
         self,
@@ -384,15 +404,26 @@ class LCMCompactionEngine:
         input_ref = self._compaction_input_ref(messages)
         message_refs = [f"message:{message.id}" for message in messages]
         source_refs = [*message_refs, input_ref]
-        cached_node = self.dag.find_by_source_ref(session_id, input_ref)
+        cached_node = self.dag.find_by_source_ref(
+            session_id,
+            input_ref,
+            include_superseded=False,
+            kind="leaf",
+            span_start=messages[0].id,
+            span_end=messages[-1].id,
+        )
+        if cached_node is not None and (
+            cached_node.kind != "leaf"
+            or cached_node.parent_node_ids
+            or cached_node.span_start != messages[0].id
+            or cached_node.span_end != messages[-1].id
+        ):
+            cached_node = None
         if cached_node is not None:
             summary_text = self._summary_body(cached_node.content)
             if self._summary_would_expand_messages(summary_text, messages):
                 return None
-            if (
-                cached_node.span_start == messages[0].id
-                and cached_node.span_end == messages[-1].id
-            ):
+            if cached_node.span_start == messages[0].id and cached_node.span_end == messages[-1].id:
                 node_id = cached_node.id
             else:
                 node_id = self.dag.create_leaf(
@@ -498,9 +529,7 @@ class LCMCompactionEngine:
         raw_cost += len(messages) * 5
         return self._summary_context_cost(summary_text) >= raw_cost
 
-    def _summary_would_expand_nodes(
-        self, summary_text: str, nodes: list[SummaryNode]
-    ) -> bool:
+    def _summary_would_expand_nodes(self, summary_text: str, nodes: list[SummaryNode]) -> bool:
         if len(nodes) <= 1:
             return False
         raw_cost = sum(self._summary_context_cost(node.content) for node in nodes)

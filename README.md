@@ -186,23 +186,20 @@ the package easier to install, test, and publish.
 
 ## CLI Surface
 
-User-facing commands:
+Public commands:
 
-- `memoryforge init`
-- `memoryforge ingest-file`
-- `memoryforge rlm-load`
-- `memoryforge rlm-search`
-- `memoryforge rlm-chunk-get`
-- `memoryforge recall-memory`
-- `memoryforge active-recall`
-- `memoryforge runtime-context`
-- `memoryforge lcm-context`
-- `memoryforge lcm-compact`
-- `memoryforge mcp-server`
+- Project/runtime: `init`, `mcp-server`, `runtime-context`
+- Conversation memory: `store-session`, `search`, `recall-memory`, `active-recall`, `long-term-source`
+- Contradictions: `record-contradiction`, `find-contradictions`
+- LCM: `lcm-context`, `lcm-compact`, `lcm-maintain`
+- RLM/source loading: `ingest-file`, `rlm-load`, `rlm-search`, `rlm-chunk-get`, `dispatch`, `context-get`, `rlm-record`, `aggregate`, `rlm-run`
+- Diagnostics: `chunk`, `benchmark`
 
-RLM/LCM sub-agents are internal workers. For real worker runs, MemoryForge uses
-Codex CLI through `codex exec` when configured. The default user path remains
-Codex CLI plus MemoryForge MCP.
+`memoryforge hook` is an internal Codex hook endpoint created by `memoryforge init`.
+RLM/LCM sub-agents are internal MemoryForge workers. For real worker runs,
+MemoryForge uses Codex CLI through `codex exec` when configured. Development-time
+Codex host subagents are separate review/triage helpers and are not the
+MemoryForge runtime worker API.
 
 ## Benchmarks
 
@@ -233,7 +230,7 @@ See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for run modes and result fields.
 
 ## Development
 
-Run the normal quality gate:
+Run the normal quality gate on Unix-like shells:
 
 ```bash
 make check
@@ -243,22 +240,37 @@ Equivalent commands:
 
 ```bash
 uv run ruff check memoryforge tests benchmarks
-env PYTHONDONTWRITEBYTECODE=1 uv run mypy memoryforge
-env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. uv run pytest --cov=memoryforge --cov-report=term-missing --cov-fail-under=77
+PYTHONDONTWRITEBYTECODE=1 uv run mypy memoryforge
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. uv run pytest --ignore=tests/test_real_subagents.py --cov=memoryforge --cov-report=term-missing --cov-fail-under=77
+MEMORYFORGE_REAL_SUBAGENT=1 MEMORYFORGE_REAL_PROJECT_ROOT="$PWD" MEMORYFORGE_SUBAGENT_RUNNER=codex MEMORYFORGE_MODEL=gpt-5.4 uv run pytest tests/test_real_subagents.py -vv
 uv build
 uv run twine check dist/*
 ```
+
+On Windows PowerShell, keep pytest temp/cache paths in writable directories:
+
+```powershell
+$env:TMP='C:\tmp'; $env:TEMP='C:\tmp'
+Remove-Item Env:\MEMORYFORGE_SUBAGENT_RUNNER -ErrorAction SilentlyContinue
+Remove-Item Env:\MEMORYFORGE_MODEL -ErrorAction SilentlyContinue
+uv run pytest --ignore=tests/test_real_subagents.py --basetemp=C:\tmp\memoryforge-pytest-basetemp -o cache_dir=.tmp\pytest-cache
+
+$env:MEMORYFORGE_REAL_SUBAGENT='1'; $env:MEMORYFORGE_REAL_PROJECT_ROOT=(Get-Location).Path
+$env:MEMORYFORGE_SUBAGENT_RUNNER='codex'; $env:MEMORYFORGE_MODEL='gpt-5.4'
+uv run pytest tests/test_real_subagents.py -vv --basetemp=C:\tmp\memoryforge-pytest-basetemp-real -o cache_dir=.tmp\pytest-cache-real
+```
+
+The real Codex sub-agent smoke tests are a separate required gate. CI/CD runners must have Codex CLI installed and authenticated; mock runners are only for targeted unit tests that verify MemoryForge's own control flow, not for release validation.
 
 ## Release Notes For Maintainers
 
 Before pushing or publishing:
 
-1. Keep generated data out of the release: `.venv/`, caches, `.coverage`,
-   `.memoryforge/`, `.codebase-memory/`, `dist/`, and `benchmarks/results/`.
+1. Keep generated data out of the release: `.venv/`, caches, `.coverage`, `.memoryforge/`, `.codebase-memory/`, `dist/`, and `benchmarks/results/`.
 2. Run the full gate on Python 3.10, 3.11, and 3.12 through CI.
 3. Build the wheel and sdist with `uv build`.
 4. Check distributions with `twine check`.
-5. Publish through the `Publish` GitHub workflow using PyPI trusted publishing.
+5. Prefer the `Publish` GitHub workflow with PyPI trusted publishing. Direct maintainer uploads may use `twine upload` with `TWINE_USERNAME=__token__` and `TWINE_PASSWORD` supplied from the shell environment, never from a committed config file.
 
 ## Documentation
 
@@ -267,4 +279,3 @@ Before pushing or publishing:
 - [docs/API.md](docs/API.md)
 - [docs/RLM.md](docs/RLM.md)
 - [docs/SECOND_BRAIN_ROADMAP.md](docs/SECOND_BRAIN_ROADMAP.md)
-# Memoryforge
