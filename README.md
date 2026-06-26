@@ -39,7 +39,7 @@ code indexing is future work rather than part of the current SQLite schema.
 | --- | --- | --- |
 | RLM | Raw Large Memory. Chunks large files/prompts and indexes them into durable memory. | Optional, for batch analysis. |
 | LTM | Long-Term Memory. Recalls durable evidence across sessions and sources. | No model call. |
-| LCM | Live Context Memory. Keeps the active session view bounded with summaries and refs. | Optional, for compaction. |
+| LCM | Lossless Context Management Keeps the active session view bounded with summaries and refs. | Optional, for compaction. |
 
 Important boundary: LCM compacts MemoryForge's SQLite-backed active context. It
 does not directly erase Codex's own context window. Codex manages its live
