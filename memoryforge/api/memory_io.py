@@ -34,6 +34,8 @@ class MemoryIOMixin:
             source_path: str | None = None,
             chunk_size: int = 12_000,
             overlap: int = 1_000,
+            *args: Any,
+            **kwargs: Any,
         ) -> dict[str, Any]: ...
 
         def lcm_compact_if_needed(

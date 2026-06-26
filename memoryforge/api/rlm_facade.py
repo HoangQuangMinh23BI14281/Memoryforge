@@ -329,7 +329,7 @@ class RLMFacadeMixin:
 
 
 def _resolve_positive_int(value: int | None, env_name: str, *, default: int) -> int:
-    candidate: object = value if value is not None else os.environ.get(env_name)
+    candidate: Any = value if value is not None else os.environ.get(env_name)
     if candidate in {None, ""}:
         return default
     try:
@@ -342,7 +342,7 @@ def _resolve_positive_int(value: int | None, env_name: str, *, default: int) -> 
 
 
 def _resolve_optional_int(value: int | None, env_name: str) -> int | None:
-    candidate: object = value if value is not None else os.environ.get(env_name)
+    candidate: Any = value if value is not None else os.environ.get(env_name)
     if candidate in {None, ""}:
         return None
     try:

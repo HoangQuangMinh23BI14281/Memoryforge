@@ -84,7 +84,7 @@ class TokenEstimator:
     def _tiktoken_estimate(self, text: str, encoding_name: str) -> int:
         """Encode with tiktoken, caching the encoder object."""
         if encoding_name not in self._encoder_cache:
-            import tiktoken
+            import tiktoken  # type: ignore[import-not-found]
 
             self._encoder_cache[encoding_name] = tiktoken.get_encoding(encoding_name)
         encoder = self._encoder_cache[encoding_name]
