@@ -2,9 +2,16 @@ import os
 import shutil
 from pathlib import Path
 
+import pytest
+
 from memoryforge import MemoryForge
 from memoryforge.agents import SubAgentOperator, SubAgentTask
 from memoryforge.lcm import ContextBudget
+
+if os.environ.get("MEMORYFORGE_REAL_SUBAGENT") != "1":
+    pytestmark = pytest.mark.skip(
+        reason="Set MEMORYFORGE_REAL_SUBAGENT=1 to run real Codex sub-agent tests"
+    )
 
 
 def _real_codex_project_root() -> Path:
