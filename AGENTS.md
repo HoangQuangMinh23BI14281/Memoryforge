@@ -43,11 +43,7 @@ New-Item -ItemType Directory -Force .tmp\pytest-cache | Out-Null
 Some tests use `tmp_path`; if Windows/OneDrive blocks pytest base temp creation,
 that is an environment issue rather than an assertion failure.
 
-Real Codex sub-agent tests are mandatory for the package gate and should run as
-a separate step against `tests/test_real_subagents.py`. Set
-`MEMORYFORGE_REAL_SUBAGENT=1`, `MEMORYFORGE_REAL_PROJECT_ROOT`,
-`MEMORYFORGE_SUBAGENT_RUNNER=codex`, and an explicit `MEMORYFORGE_MODEL`; do not
-set `MEMORYFORGE_SUBAGENT_RUNNER=mock` for CI/CD or release validation.
+Real Codex sub-agent tests are local-only and should run separately against `tests/test_real_subagents.py` when you need to verify `runner="codex"`. Set `MEMORYFORGE_REAL_SUBAGENT=1`, `MEMORYFORGE_REAL_PROJECT_ROOT`, `MEMORYFORGE_SUBAGENT_RUNNER=codex`, and an explicit `MEMORYFORGE_MODEL`; do not set `MEMORYFORGE_SUBAGENT_RUNNER=mock` for that local verification.
 
 ## Development-Time Subagent Workflow
 

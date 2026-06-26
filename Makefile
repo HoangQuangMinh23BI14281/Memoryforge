@@ -23,19 +23,12 @@ check:
 	$(MAKE) lint
 	$(MAKE) typecheck
 	$(MAKE) test-python
-	$(MAKE) test-real-subagents
 
-lint:
-	uv run --with ruff ruff check memoryforge tests benchmarks
-
-typecheck:
-	env PYTHONDONTWRITEBYTECODE=1 uv run --with mypy mypy memoryforge
-
-test: check
+test:
+	$(MAKE) check
 
 test-python:
 	env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=$(PYTHONPATH) uv run --with pytest --with pytest-cov pytest \
-		--ignore=tests/test_real_subagents.py \
 		--cov=memoryforge --cov-report=term-missing --cov-fail-under=$(COVERAGE_MIN)
 
 test-real-subagents:

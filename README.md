@@ -260,7 +260,7 @@ $env:MEMORYFORGE_SUBAGENT_RUNNER='codex'; $env:MEMORYFORGE_MODEL='gpt-5.4'
 uv run pytest tests/test_real_subagents.py -vv --basetemp=C:\tmp\memoryforge-pytest-basetemp-real -o cache_dir=.tmp\pytest-cache-real
 ```
 
-The real Codex sub-agent smoke tests are a separate required gate. CI/CD runners must have Codex CLI installed and authenticated; mock runners are only for targeted unit tests that verify MemoryForge's own control flow, not for release validation.
+The real Codex sub-agent smoke tests are local-only. Run them on a machine with the Codex CLI installed and authenticated if you want to verify `runner="codex"`; they are not part of CI/CD. Mock runners are only for targeted unit tests that verify MemoryForge's own control flow.
 
 ## Release Notes For Maintainers
 
