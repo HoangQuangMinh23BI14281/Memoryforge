@@ -6,7 +6,7 @@ Recursive Language Model substrate:
 - Search Pipeline: BM25/vector fusion for pass-by-reference context recall
 """
 
-__version__ = "6.0.5"
+__version__ = "6.0.6"
 
 from memoryforge._core import BM25Index, ContentHashTable, rrf_fusion
 from memoryforge.agents import create_subagent_runner

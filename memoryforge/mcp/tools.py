@@ -7,9 +7,36 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from memoryforge.api import MemoryForge
+from memoryforge.init import ensure_project_initialized
+from memoryforge.init.autoload import index_project_markdown
 from memoryforge.lcm import ContextBudget
 
 T = TypeVar("T")
+
+
+def ensure_project_memory_tool(db_path: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    root = Path(str(arguments.get("project_root") or ".")).expanduser().resolve()
+    return ensure_project_initialized(
+        str(root),
+        agent_id=str(arguments.get("agent_id") or "default"),
+        configure_codex=False,
+        auto_index=bool(arguments.get("auto_index", True)),
+        install_hooks=False,
+    )
+
+
+def autoload_markdown_tool(db_path: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    root = Path(str(arguments.get("project_root") or ".")).expanduser().resolve()
+    return index_project_markdown(
+        db_path=db_path,
+        agent_id=str(arguments.get("agent_id") or "default"),
+        project_root=str(root),
+        chunk_size=int(arguments.get("chunk_size", 12_000)),
+        overlap=int(arguments.get("overlap", 1_000)),
+        max_files=int(arguments.get("max_files", 200)),
+        max_file_bytes=int(arguments.get("max_file_bytes", 1_000_000)),
+    )
+
 
 
 def _safe_close(mf: MemoryForge) -> None:
@@ -347,3 +374,4 @@ def rlm_run_tool(db_path: str, arguments: dict[str, Any]) -> dict[str, Any]:
         )
 
     return _with_memory_forge(db_path, handler, arguments)
+

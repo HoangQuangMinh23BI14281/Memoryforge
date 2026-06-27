@@ -12,8 +12,10 @@ from mcp.server import Server
 
 from memoryforge.mcp.tools import (
     active_recall_tool,
+    autoload_markdown_tool,
     build_context_bundle_tool,
     build_runtime_context_bundle_tool,
+    ensure_project_memory_tool,
     find_contradictions_tool,
     ingest_file_tool,
     recall_conversation_tool,
@@ -36,6 +38,33 @@ if Server is not None:
     @app.list_tools()
     async def handle_list_tools() -> list[Any]:
         return [
+            types.Tool(
+                name="ensure_project_memory",
+                description="Ensure .memoryforge state exists for the current project and bootstrap Markdown autoload metadata",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {"type": "string"},
+                        "project_root": {"type": "string"},
+                        "auto_index": {"type": "boolean", "default": True},
+                    },
+                },
+            ),
+            types.Tool(
+                name="autoload_markdown",
+                description="Index changed Markdown files into RLM/LTM using the project autoload manifest",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {"type": "string"},
+                        "project_root": {"type": "string"},
+                        "chunk_size": {"type": "integer", "default": 12000},
+                        "overlap": {"type": "integer", "default": 1000},
+                        "max_files": {"type": "integer", "default": 200},
+                        "max_file_bytes": {"type": "integer", "default": 1000000},
+                    },
+                },
+            ),
             types.Tool(
                 name="store_conversation",
                 description="Store conversation turns in MemoryForge",
@@ -350,6 +379,12 @@ if Server is not None:
     @app.call_tool()
     async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[Any]:
         db_path = _resolve_mcp_db_path()
+        if name == "ensure_project_memory":
+            result = ensure_project_memory_tool(db_path, arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+        if name == "autoload_markdown":
+            result = autoload_markdown_tool(db_path, arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
         if name == "store_conversation":
             result = store_conversation_tool(db_path, arguments)
             return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
@@ -433,4 +468,5 @@ def run_server() -> None:
             await app.run(read_stream, write_stream, app.create_initialization_options())
 
     asyncio.run(run_stdio())
+
 

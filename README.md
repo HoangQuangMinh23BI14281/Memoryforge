@@ -43,8 +43,8 @@ code indexing is future work rather than part of the current SQLite schema.
 
 Important boundary: LCM compacts MemoryForge's SQLite-backed active context. It
 does not directly erase Codex's own context window. Codex manages its live
-thread and can compact it with `/compact`; MemoryForge hooks and MCP tools then
-help preserve and rehydrate the evidence needed after compaction.
+thread and can compact it with `/compact`; MemoryForge MCP tools then help
+preserve and rehydrate the evidence needed after compaction.
 
 ## Install
 
@@ -75,10 +75,8 @@ This creates:
 ```text
 .memoryforge/memory.db
 .memoryforge/config.json
-.memoryforge/hooks/memoryforge-hook.cmd  # Windows
-.memoryforge/hooks/memoryforge-hook.sh   # Unix-like
 .codex/config.toml
-.codex/hooks.json
+.codex/AGENTS.md
 ```
 
 The Codex config registers the MemoryForge MCP server:
@@ -92,15 +90,16 @@ args = ["run", "memoryforge-mcp"]
 MEMORYFORGE_DB = "/absolute/path/.memoryforge/memory.db"
 ```
 
-The hook file records prompt and compaction lifecycle events. MemoryForge writes a `.cmd` launcher on Windows and a `.sh` launcher on Unix-like systems. During init,
-MemoryForge also scans project Markdown files, loads them as RLM buffers/chunks,
-and indexes them into LTM/vector recall. Project-local Codex hooks only run
-after the project `.codex/` layer is trusted by Codex. Inspect and trust them
-in the CLI with `/hooks` if Codex asks.
+During init, MemoryForge scans project Markdown files, loads them as RLM buffers/chunks,
+and indexes them into LTM/vector recall. The default integration path is MCP/tool-first:
+Codex uses the project `.codex/AGENTS.md` instructions plus MemoryForge MCP tools to
+bootstrap project memory, refresh Markdown autoload, and retrieve bounded context.
 
-## Prompt Submit, Cancel, And Retract
+Legacy Codex hooks are optional only. Install them explicitly with `uv run memoryforge init . --codex-hooks` if you are testing MemoryForge's hook endpoint itself.
 
-MemoryForge uses a two-phase hook flow for user prompts:
+## Optional Legacy Hooks
+
+If you opt into `--codex-hooks`, MemoryForge uses a two-phase hook flow for user prompts:
 
 - `UserPromptSubmit` writes the latest prompt for the session to
   `.memoryforge/pending/`.
@@ -192,7 +191,7 @@ Public commands:
 - RLM/source loading: `ingest-file`, `rlm-load`, `rlm-search`, `rlm-chunk-get`, `dispatch`, `context-get`, `rlm-record`, `aggregate`, `rlm-run`
 - Diagnostics: `chunk`, `benchmark`
 
-`memoryforge hook` is an internal Codex hook endpoint created by `memoryforge init`.
+`memoryforge hook` remains available as an internal legacy endpoint when `--codex-hooks` is installed.
 RLM/LCM sub-agents are internal MemoryForge workers. For real worker runs,
 MemoryForge uses Codex CLI through `codex exec` when configured. Development-time
 Codex host subagents are separate review/triage helpers and are not the

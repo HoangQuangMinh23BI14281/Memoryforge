@@ -27,13 +27,17 @@ MEMORYFORGE_AGENTS_CONTENT = """# MemoryForge Project Memory
 
 MemoryForge is configured for this project. Use its MCP tools before answering questions that depend on project history, prior conversation, Markdown notes, or oversized source context.
 
+- At the start of a session in this repository, call `ensure_project_memory` once for the current project root.
+- When Markdown notes may have changed, call `autoload_markdown` before relying on document memory.
 - Use `recall_memory` for durable RLM/LTM recall. It combines BM25 and vector recall with RRF-style ranking where available.
 - Use `build_context_bundle` or `build_runtime_context_bundle` when a prompt needs grounded context for the core model.
 - Use `rlm_load`, `rlm_search`, and `rlm_chunk_get` for large files or documents instead of reading everything into the prompt.
 - Use `rlm_run` only when the task needs real Codex CLI sub-agent analysis over large context.
-- Store useful session evidence in LCM through MemoryForge hooks/MCP; do not create alternate memory folders.
+- Store useful durable evidence through MemoryForge MCP tools; do not create alternate memory folders.
 - The project-local database is `.memoryforge/memory.db` unless `MEMORYFORGE_DB` explicitly overrides it.
 """
+
+
 class RegisterStatus(str, Enum):
     REGISTERED = "registered"
     ALREADY = "already"
@@ -198,6 +202,30 @@ def install_codex_hooks(
     )
     _write_json(hooks_path, payload)
 
+
+def remove_codex_hooks(hooks_path: Path) -> bool:
+    payload = _read_json(hooks_path)
+    hooks = payload.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    cleaned: dict[str, Any] = {}
+    changed = False
+    for event, value in hooks.items():
+        entries = _without_memoryforge_hooks(value)
+        if entries:
+            cleaned[str(event)] = entries
+        elif value:
+            changed = True
+        if entries != value:
+            changed = True
+    if not changed:
+        return False
+    if cleaned:
+        payload["hooks"] = cleaned
+    else:
+        payload.pop("hooks", None)
+    _write_json(hooks_path, payload)
+    return True
 
 def _merge_memoryforge_hooks(
     existing: dict[str, Any],
@@ -425,5 +453,6 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
 
 

@@ -1475,7 +1475,7 @@ wheels = [
 
 [[package]]
 name = "memfg"
-version = "6.0.5"
+version = "6.0.6"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },

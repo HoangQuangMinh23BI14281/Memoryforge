@@ -19,6 +19,7 @@ from memoryforge.init.codex import (
     build_memoryforge_mcp_spec,
     install_codex_agents_md,
     install_codex_hooks,
+    remove_codex_hooks,
 )
 
 
@@ -29,6 +30,7 @@ def init_project(
     *,
     configure_codex: bool = True,
     auto_index: bool = True,
+    install_hooks: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
@@ -36,20 +38,28 @@ def init_project(
     memory_dir = root / ".memoryforge"
     hooks_dir = memory_dir / "hooks"
     memory_dir.mkdir(parents=True, exist_ok=True)
-    hooks_dir.mkdir(parents=True, exist_ok=True)
 
     resolved_db = Path(db_path).expanduser() if db_path else memory_dir / "memory.db"
     if not resolved_db.is_absolute():
         resolved_db = (root / resolved_db).resolve()
     init_memoryforge_schema(str(resolved_db))
 
-    hook_runner = _write_hook_runner(root, hooks_dir, force=force)
-    written = [str(hook_runner)]
+    written: list[str] = []
+    hook_runner: Path | None = None
+    if install_hooks:
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        hook_runner = _write_hook_runner(root, hooks_dir, force=force)
+        written.append(str(hook_runner))
     if configure_codex:
         written.extend(
             str(path)
             for path in _write_codex_settings(
-                root, resolved_db, agent_id, hook_runner, force=force
+                root,
+                resolved_db,
+                agent_id,
+                hook_runner=hook_runner,
+                install_hooks=install_hooks,
+                force=force,
             )
         )
 
@@ -80,6 +90,7 @@ def init_project(
                 "agent_id": agent_id,
                 "project_root": str(root),
                 "auto_index": bool(auto_index),
+                "hooks_enabled": bool(install_hooks),
                 "subagent": subagent_config,
             },
             indent=2,
@@ -94,6 +105,7 @@ def init_project(
         "db_path": str(resolved_db),
         "indexed": indexed,
         "written": written,
+        "hooks_enabled": bool(install_hooks),
     }
 
 
@@ -103,6 +115,7 @@ def ensure_project_initialized(
     agent_id: str = "default",
     configure_codex: bool = False,
     auto_index: bool = True,
+    install_hooks: bool = False,
 ) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
     db_path = root / ".memoryforge" / "memory.db"
@@ -112,6 +125,7 @@ def ensure_project_initialized(
         agent_id=agent_id,
         configure_codex=configure_codex,
         auto_index=auto_index,
+        install_hooks=install_hooks,
         force=False,
     )
 
@@ -196,7 +210,13 @@ def _write_hook_runner(root: Path, hooks_dir: Path, *, force: bool) -> Path:
 
 
 def _write_codex_settings(
-    root: Path, db_path: Path, agent_id: str, hook_runner: Path, *, force: bool
+    root: Path,
+    db_path: Path,
+    agent_id: str,
+    *,
+    hook_runner: Path | None,
+    install_hooks: bool,
+    force: bool,
 ) -> list[Path]:
     codex_dir = root / ".codex"
     codex_dir.mkdir(parents=True, exist_ok=True)
@@ -210,13 +230,20 @@ def _write_codex_settings(
     if result.status in {RegisterStatus.MISMATCH, RegisterStatus.FAILED}:
         raise ValueError(f"Could not configure Codex MCP delivery: {result.detail}")
 
-    install_codex_hooks(
-        hooks_path,
-        db_path=db_path,
-        agent_id=agent_id,
-        project_root=root,
-        hook_runner=hook_runner,
-    )
+    written = [config_path]
+    if install_hooks:
+        if hook_runner is None:
+            raise ValueError("hook_runner is required when install_hooks=True")
+        install_codex_hooks(
+            hooks_path,
+            db_path=db_path,
+            agent_id=agent_id,
+            project_root=root,
+            hook_runner=hook_runner,
+        )
+        written.append(hooks_path)
+    else:
+        remove_codex_hooks(hooks_path)
     install_codex_agents_md(agents_path)
-    return [config_path, hooks_path, agents_path]
-
+    written.append(agents_path)
+    return written

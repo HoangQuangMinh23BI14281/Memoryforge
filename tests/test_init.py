@@ -34,8 +34,9 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
     assert result["indexed"]["files"] == 1
     assert result["indexed"]["chunks"] >= 1
     assert result["indexed"]["long_term_items"] >= 1
+    assert result["hooks_enabled"] is False
     assert (project / ".codex" / "config.toml").exists()
-    assert (project / ".memoryforge" / "hooks").exists() and any((project / ".memoryforge" / "hooks").glob("memoryforge-hook.*"))
+    assert not (project / ".memoryforge" / "hooks").exists()
     config_text = (project / ".codex" / "config.toml").read_text(encoding="utf-8")
     assert "# --- MemoryForge MCP server ---" in config_text
     assert "[mcp_servers.memoryforge]" in config_text
@@ -45,25 +46,13 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
         (project / ".memoryforge" / "config.json").read_text(encoding="utf-8")
     )
     assert memoryforge_config["auto_index"] is True
+    assert memoryforge_config["hooks_enabled"] is False
     assert memoryforge_config["subagent"]["runner"] == "codex"
     assert memoryforge_config["subagent"]["model"] == "gpt-5.4"
-    hooks = json.loads((project / ".codex" / "hooks.json").read_text(encoding="utf-8"))
-    assert set(hooks["hooks"]) == {"SessionStart", "UserPromptSubmit", "PreCompact", "Stop"}
-    user_prompt_commands = [
-        handler["command"]
-        for group in hooks["hooks"]["UserPromptSubmit"]
-        for handler in group.get("hooks", [])
-    ]
-    assert any(
-        "memoryforge.exe hook" in command and " user-prompt-submit " in f" {command} "
-        for command in user_prompt_commands
-    )
-    if os.name == "nt":
-        assert any(command.startswith(r".venv\Scripts\memoryforge.exe hook") for command in user_prompt_commands)
-        assert all(str(project) not in command for command in user_prompt_commands)
+    assert not (project / ".codex" / "hooks.json").exists()
 
 
-def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path, monkeypatch):
+def test_init_removes_memoryforge_hooks_but_keeps_user_hooks(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
     home = tmp_path / "home"
@@ -82,7 +71,9 @@ def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path, monkeyp
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": ".memoryforge/hooks/memoryforge-hook.cmd session-end" if os.name == "nt" else ".memoryforge/hooks/memoryforge-hook.sh session-end",
+                                    "command": ".memoryforge/hooks/memoryforge-hook.cmd session-end"
+                                    if os.name == "nt"
+                                    else ".memoryforge/hooks/memoryforge-hook.sh session-end",
                                 }
                             ]
                         }
@@ -94,20 +85,27 @@ def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path, monkeyp
     )
 
     init_project(str(project), agent_id="agent", force=True)
-    init_project(str(project), agent_id="agent", force=True)
 
     hooks = json.loads((codex_dir / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-    stop_commands = json.dumps(hooks["Stop"])
-    assert "echo keep" in stop_commands
-    memoryforge_stop_hooks = [
-        handler["command"]
-        for group in hooks["Stop"]
-        for handler in group.get("hooks", [])
-        if "memoryforge.exe hook" in handler.get("command", "")
-        and " stop " in f" {handler.get('command', '')} "
-    ]
-    assert len(memoryforge_stop_hooks) == 1
+    assert hooks["Stop"][0]["hooks"][0]["command"] == "echo keep"
     assert "SessionEnd" not in hooks
+
+
+def test_init_opt_in_codex_hooks(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _isolate_home(monkeypatch, home)
+    (project / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+
+    result = init_project(str(project), agent_id="agent", install_hooks=True, force=True)
+
+    assert result["hooks_enabled"] is True
+    assert (project / ".memoryforge" / "hooks").exists()
+    hooks = json.loads((project / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    assert set(hooks["hooks"]) == {"SessionStart", "UserPromptSubmit", "PreCompact", "Stop"}
 
 
 def test_init_refuses_user_managed_memoryforge_mcp_without_force(tmp_path):
@@ -239,6 +237,7 @@ def test_hook_discards_pending_prompt_on_explicit_retract_event(tmp_path, monkey
     assert stop_result["committed"]["committed"] == 0
     assert long_term_hits == []
 
+
 def test_session_start_hook_indexes_markdown_files(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMORYFORGE_SUBAGENT_RUNNER", "mock")
     monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
@@ -278,6 +277,8 @@ def test_init_writes_codex_agents_instructions(tmp_path, monkeypatch):
     agents_text = (project / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
 
     assert "MemoryForge Project Memory" in agents_text
+    assert "ensure_project_memory" in agents_text
+    assert "autoload_markdown" in agents_text
     assert "recall_memory" in agents_text
     assert "rlm_run" in agents_text
     assert str(project / ".codex" / "AGENTS.md") in result["written"]

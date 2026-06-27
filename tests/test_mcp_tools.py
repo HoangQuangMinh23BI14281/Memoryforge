@@ -8,8 +8,10 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from memoryforge.init import init_project
 from memoryforge.mcp.tools import (
     active_recall_tool,
+    autoload_markdown_tool,
     build_context_bundle_tool,
     build_runtime_context_bundle_tool,
+    ensure_project_memory_tool,
     find_contradictions_tool,
     ingest_file_tool,
     recall_conversation_tool,
@@ -42,6 +44,8 @@ def test_mcp_server_stdio_handshake(tmp_path):
                 tools = await session.list_tools()
 
         assert initialized.serverInfo.name == "memoryforge"
+        assert any(tool.name == "ensure_project_memory" for tool in tools.tools)
+        assert any(tool.name == "autoload_markdown" for tool in tools.tools)
         assert any(tool.name == "rlm_run" for tool in tools.tools)
         assert any(tool.name == "record_contradiction" for tool in tools.tools)
         assert any(tool.name == "find_contradictions" for tool in tools.tools)
@@ -74,6 +78,14 @@ def check():
         encoding="utf-8",
     )
 
+    ensured = ensure_project_memory_tool(
+        db_path,
+        {"agent_id": "agent", "project_root": str(project), "auto_index": True},
+    )
+    autoloaded = autoload_markdown_tool(
+        db_path,
+        {"agent_id": "agent", "project_root": str(project)},
+    )
     stored = store_conversation_tool(
         db_path,
         {
@@ -82,6 +94,9 @@ def check():
             "turns": [{"role": "user", "content": "Health route uses check."}],
         },
     )
+    assert ensured["project_root"] == str(project.resolve())
+    assert ensured["hooks_enabled"] is False
+    assert autoloaded["enabled"] is True
     assert stored["count"] == 1
     assert recall_conversation_tool(db_path, {"agent_id": "agent", "query": "Health"})["results"]
     bundle = build_context_bundle_tool(

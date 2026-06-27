@@ -33,6 +33,7 @@ def run_command(args: argparse.Namespace) -> int:
                 agent_id=args.agent_id,
                 configure_codex=not args.no_codex,
                 auto_index=not args.no_index,
+                install_hooks=args.codex_hooks,
                 force=args.force,
             )
         )
@@ -379,4 +380,5 @@ def run_command(args: argparse.Namespace) -> int:
     finally:
         mf.close()
     return 0
+
 
