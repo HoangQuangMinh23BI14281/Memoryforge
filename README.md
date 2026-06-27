@@ -75,7 +75,8 @@ This creates:
 ```text
 .memoryforge/memory.db
 .memoryforge/config.json
-.memoryforge/hooks/memoryforge-hook.sh
+.memoryforge/hooks/memoryforge-hook.cmd  # Windows
+.memoryforge/hooks/memoryforge-hook.sh   # Unix-like
 .codex/config.toml
 .codex/hooks.json
 ```
@@ -91,7 +92,7 @@ args = ["run", "memoryforge-mcp"]
 MEMORYFORGE_DB = "/absolute/path/.memoryforge/memory.db"
 ```
 
-The hook file records prompt and compaction lifecycle events. During init,
+The hook file records prompt and compaction lifecycle events. MemoryForge writes a `.cmd` launcher on Windows and a `.sh` launcher on Unix-like systems. During init,
 MemoryForge also scans project Markdown files, loads them as RLM buffers/chunks,
 and indexes them into LTM/vector recall. Project-local Codex hooks only run
 after the project `.codex/` layer is trusted by Codex. Inspect and trust them

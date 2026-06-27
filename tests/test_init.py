@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 
 import pytest
@@ -34,7 +35,7 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
     assert result["indexed"]["chunks"] >= 1
     assert result["indexed"]["long_term_items"] >= 1
     assert (project / ".codex" / "config.toml").exists()
-    assert (project / ".memoryforge" / "hooks" / "memoryforge-hook.sh").exists()
+    assert (project / ".memoryforge" / "hooks").exists() and any((project / ".memoryforge" / "hooks").glob("memoryforge-hook.*"))
     config_text = (project / ".codex" / "config.toml").read_text(encoding="utf-8")
     assert "# --- MemoryForge MCP server ---" in config_text
     assert "[mcp_servers.memoryforge]" in config_text
@@ -54,7 +55,7 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
         for handler in group.get("hooks", [])
     ]
     assert any(
-        "memoryforge-hook.sh" in command and " user-prompt-submit " in f" {command} "
+        "memoryforge-hook." in command and " user-prompt-submit " in f" {command} "
         for command in user_prompt_commands
     )
 
@@ -78,7 +79,7 @@ def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path, monkeyp
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": ".memoryforge/hooks/memoryforge-hook.sh session-end",
+                                    "command": ".memoryforge/hooks/memoryforge-hook.cmd session-end" if os.name == "nt" else ".memoryforge/hooks/memoryforge-hook.sh session-end",
                                 }
                             ]
                         }
@@ -99,7 +100,7 @@ def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path, monkeyp
         handler["command"]
         for group in hooks["Stop"]
         for handler in group.get("hooks", [])
-        if "memoryforge-hook.sh" in handler.get("command", "")
+        if "memoryforge-hook." in handler.get("command", "")
         and " stop " in f" {handler.get('command', '')} "
     ]
     assert len(memoryforge_stop_hooks) == 1

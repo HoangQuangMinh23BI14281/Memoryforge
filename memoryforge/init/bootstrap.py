@@ -134,19 +134,58 @@ def install_codex_global(*, force: bool = False) -> dict[str, Any]:
 
 
 def _write_hook_runner(root: Path, hooks_dir: Path, *, force: bool) -> Path:
+    if os.name == "nt":
+        runner = hooks_dir / "memoryforge-hook.cmd"
+        if runner.exists() and not force:
+            return runner
+        runner.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    "setlocal",
+                    f'cd /d "{root}"',
+                    'if exist ".venv\\Scripts\\memoryforge.exe" (',
+                    '  ".venv\\Scripts\\memoryforge.exe" hook %*',
+                    '  exit /b %errorlevel%',
+                    ')',
+                    'where uv >nul 2>nul',
+                    'if %errorlevel%==0 (',
+                    '  uv run memoryforge hook %*',
+                    '  exit /b %errorlevel%',
+                    ')',
+                    'where memoryforge.exe >nul 2>nul',
+                    'if %errorlevel%==0 (',
+                    '  memoryforge.exe hook %*',
+                    '  exit /b %errorlevel%',
+                    ')',
+                    'echo MemoryForge hook runner not found 1>&2',
+                    'exit /b 1',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return runner
     runner = hooks_dir / "memoryforge-hook.sh"
     if runner.exists() and not force:
         return runner
     runner.write_text(
         "\n".join(
             [
-                "#!/usr/bin/env bash",
-                "set -euo pipefail",
+                "#!/usr/bin/env sh",
+                "set -eu",
                 f"cd {shlex.quote(str(root))}",
+                'if [ -x ".venv/bin/memoryforge" ]; then',
+                '  exec .venv/bin/memoryforge hook "$@"',
+                "fi",
                 "if command -v uv >/dev/null 2>&1; then",
                 '  exec uv run memoryforge hook "$@"',
                 "fi",
-                'exec memoryforge hook "$@"',
+                "if command -v memoryforge >/dev/null 2>&1; then",
+                '  exec memoryforge hook "$@"',
+                "fi",
+                'echo "MemoryForge hook runner not found" >&2',
+                "exit 1",
                 "",
             ]
         ),

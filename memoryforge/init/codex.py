@@ -265,6 +265,13 @@ def _hook_command(
     agent_id: str,
     project_root: Path,
 ) -> str:
+    if hook_runner.suffix.lower() == ".cmd":
+        return (
+            f"{_cmd_quote(str(hook_runner))} {_cmd_quote(event)} "
+            f"--db {_cmd_quote(str(db_path))} "
+            f"--agent-id {_cmd_quote(agent_id)} "
+            f"--project-root {_cmd_quote(str(project_root))}"
+        )
     return (
         f"{shlex.quote(str(hook_runner))} {hook_event_arg(event)} "
         f"--db {shlex.quote(str(db_path))} "
@@ -275,6 +282,10 @@ def _hook_command(
 
 def hook_event_arg(event: str) -> str:
     return shlex.quote(event)
+
+
+def _cmd_quote(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
 
 
 def _entry_to_spec(name: str, entry: dict[str, Any]) -> ServerSpec:
