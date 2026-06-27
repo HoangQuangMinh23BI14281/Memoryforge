@@ -10,8 +10,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,9 +22,6 @@ class SubAgentRunnerError(RuntimeError):
 
 class TransientSubAgentRunnerError(SubAgentRunnerError):
     """Raised when retrying the same sub-agent operation may succeed."""
-
-
-_TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -224,68 +219,6 @@ class CodexSubAgentRunner(BaseSubAgentRunner):
         return command
 
 
-class OpenAIResponsesRunner(BaseSubAgentRunner):
-    provider = "openai"
-
-    def __init__(
-        self,
-        *,
-        api_key: str | None,
-        model: str,
-        base_url: str | None = None,
-        project_root: str | None = None,
-        timeout_s: float = 900.0,
-    ):
-        super().__init__(model=model, project_root=project_root, timeout_s=timeout_s)
-        self.api_key = api_key
-        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
-
-    def complete(self, prompt: str) -> SubAgentResponse:
-        started = time.monotonic()
-        payload = json.dumps({"model": self.model, "input": prompt}).encode("utf-8")
-        headers = _openai_headers(self.api_key)
-        request = urllib.request.Request(
-            f"{self.base_url}/responses",
-            data=payload,
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = _read_http_error_body(exc)
-            error_class = (
-                TransientSubAgentRunnerError
-                if exc.code in _TRANSIENT_HTTP_STATUS_CODES
-                else SubAgentRunnerError
-            )
-            raise error_class(
-                f"openai sub-agent request failed: HTTP {exc.code} {exc.reason}. {detail}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            error_class = (
-                TransientSubAgentRunnerError
-                if _is_transient_url_error(exc)
-                else SubAgentRunnerError
-            )
-            raise error_class(f"openai sub-agent request failed: {exc}") from exc
-        data = json.loads(body)
-        text = _extract_openai_text(data)
-        if not text:
-            raise SubAgentRunnerError("openai sub-agent returned empty output")
-        usage = _extract_usage(data)
-        return SubAgentResponse(
-            self.provider,
-            self.model,
-            text,
-            time.monotonic() - started,
-            input_tokens=usage.get("input_tokens"),
-            output_tokens=usage.get("output_tokens"),
-            total_tokens=usage.get("total_tokens"),
-        )
-
-
 def create_subagent_runner(
     runner: str | None = None,
     *,
@@ -316,10 +249,6 @@ def create_subagent_runner(
     if requested == "codex":
         _require_explicit_model("codex", resolved_model)
         return _codex_runner(resolved_model, project_root, timeout_s)
-    if requested == "openai":
-        raise SubAgentRunnerError(
-            "OpenAI sub-agent runner is disabled in this build. Use --runner codex or MEMORYFORGE_SUBAGENT_RUNNER=codex."
-        )
     if requested != "auto":
         raise SubAgentRunnerError(f"Unknown sub-agent runner: {runner}")
 
@@ -368,132 +297,9 @@ def _codex_runner(
     )
 
 
-def _openai_runner(
-    model: str | None,
-    project_root: str | None,
-    timeout_s: float,
-    base_url: str | None = None,
-    api_key: str | None = None,
-) -> OpenAIResponsesRunner:
-    resolved_api_key = (
-        api_key or os.environ.get("MEMORYFORGE_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    )
-    resolved_base_url = _resolved_base_url(base_url)
-    if not model:
-        raise SubAgentRunnerError("MEMORYFORGE_MODEL or --model is required for --runner openai")
-    if not resolved_api_key and _is_official_openai_url(resolved_base_url):
-        raise SubAgentRunnerError("OPENAI_API_KEY is required for official OpenAI --runner openai")
-    return OpenAIResponsesRunner(
-        api_key=resolved_api_key,
-        model=model,
-        base_url=resolved_base_url,
-        project_root=project_root,
-        timeout_s=timeout_s,
-    )
-
-
-def _resolved_base_url(base_url: str | None = None) -> str:
-    return (
-        base_url
-        or os.environ.get("MEMORYFORGE_OPENAI_BASE_URL")
-        or os.environ.get("OPENAI_BASE_URL")
-        or "https://api.openai.com/v1"
-    ).rstrip("/")
-
-
-def _has_explicit_base_url(base_url: str | None = None) -> bool:
-    return bool(
-        base_url
-        or os.environ.get("MEMORYFORGE_OPENAI_BASE_URL")
-        or os.environ.get("OPENAI_BASE_URL")
-    )
-
-
-def _is_official_openai_url(base_url: str) -> bool:
-    return base_url.rstrip("/") == "https://api.openai.com/v1"
-
-
 def _config_str(config: dict[str, object], key: str) -> str | None:
     value = config.get(key)
     return value if isinstance(value, str) and value else None
-
-
-def _openai_headers(api_key: str | None) -> dict[str, str]:
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "MemoryForge/6.0",
-    }
-    extra_headers = os.environ.get("MEMORYFORGE_OPENAI_HEADERS")
-    if extra_headers:
-        try:
-            decoded = json.loads(extra_headers)
-        except json.JSONDecodeError as exc:
-            raise SubAgentRunnerError("MEMORYFORGE_OPENAI_HEADERS must be a JSON object") from exc
-        if not isinstance(decoded, dict) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in decoded.items()
-        ):
-            raise SubAgentRunnerError(
-                "MEMORYFORGE_OPENAI_HEADERS must be a JSON object with string keys and values"
-            )
-        headers.update({str(key): str(value) for key, value in decoded.items()})
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    return headers
-
-
-def _read_http_error_body(exc: urllib.error.HTTPError, limit: int = 1200) -> str:
-    try:
-        body = exc.read().decode("utf-8", errors="replace")
-    except Exception:
-        body = ""
-    compact = _compact_preview(body, limit)
-    if compact:
-        return f"Response body: {compact}"
-    return "Set MEMORYFORGE_OPENAI_API_KEY or OPENAI_API_KEY if the proxy requires Authorization."
-
-
-def _is_transient_url_error(exc: urllib.error.URLError) -> bool:
-    reason = getattr(exc, "reason", None)
-    return isinstance(reason, TimeoutError | ConnectionError)
-
-
-def _extract_openai_text(data: dict[str, object]) -> str:
-    output_text = data.get("output_text")
-    if isinstance(output_text, str):
-        return output_text.strip()
-    parts: list[str] = []
-    output = data.get("output")
-    if not isinstance(output, list):
-        return ""
-    for item in output:
-        if not isinstance(item, dict):
-            continue
-        content_items = item.get("content")
-        if not isinstance(content_items, list):
-            continue
-        for content in content_items:
-            if not isinstance(content, dict):
-                continue
-            text = content.get("text")
-            if isinstance(text, str):
-                parts.append(text)
-    return "\n".join(parts).strip()
-
-
-def _extract_usage(data: dict[str, object]) -> dict[str, int]:
-    usage = data.get("usage")
-    if not isinstance(usage, dict):
-        return {}
-    return {
-        key: int(value)
-        for key, value in {
-            "input_tokens": usage.get("input_tokens"),
-            "output_tokens": usage.get("output_tokens"),
-            "total_tokens": usage.get("total_tokens"),
-        }.items()
-        if isinstance(value, int)
-    }
 
 
 def _extract_chunk_ids(text: str) -> list[str]:
@@ -510,4 +316,4 @@ def _compact_preview(text: str, limit: int) -> str:
     compact = " ".join((text or "").split())
     if len(compact) <= limit:
         return compact
-    return compact[: limit - 1].rstrip() + "…"
+    return compact[: limit - 1].rstrip() + "..."

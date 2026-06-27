@@ -346,6 +346,30 @@ def test_recorded_correction_supersedes_wrong_memory_in_recall(tmp_path):
         mf.close()
 
 
+
+def test_ltm_recall_fuses_bm25_and_vector_streams(tmp_path, monkeypatch):
+    _install_fake_fastembed(monkeypatch)
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "fastembed")
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_MODEL", "fake-semantic-model")
+    db_path = str(tmp_path / "memory.db")
+    mf = MemoryForge(db_path)
+    try:
+        item_id = mf.long_term.index_raw_item(
+            "agent",
+            "note",
+            "hybrid-note",
+            "semantic embedding memory also names Project Atlas amber-17.",
+        )
+
+        hits = mf.recall_long_term("agent", "semantic embedding Project Atlas", top_k=3)
+
+        assert hits
+        assert hits[0]["item_id"] == item_id
+        assert "bm25" in hits[0]["streams"]
+        assert "vector" in hits[0]["streams"]
+        assert "fusion" in hits[0]["streams"]
+    finally:
+        mf.close()
 def test_ltm_ensemble_keeps_each_retrieval_stream_champion():
     selected = LongTermRetrievalMixin._select_ensemble_ids(
         [("shared-noise", 0.9), ("lexical-answer", 0.3), ("semantic-hit", 0.2)],

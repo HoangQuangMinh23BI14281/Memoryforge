@@ -1,15 +1,10 @@
 import json
-from io import BytesIO
-from urllib.error import HTTPError
-
 import pytest
 
 from memoryforge.agents import BaseSubAgentRunner, SubAgentOperator, SubAgentResponse
 from memoryforge.agents.subagents import (
     CodexSubAgentRunner,
-    OpenAIResponsesRunner,
     SubAgentRunnerError,
-    TransientSubAgentRunnerError,
     create_subagent_runner,
 )
 
@@ -97,104 +92,9 @@ def test_codex_command_forces_model_config_override():
     assert command[-1] == "-"
 
 
-def test_openai_runner_sends_exact_model_to_custom_proxy(monkeypatch):
-    captured = {}
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return None
-
-        def read(self):
-            return (
-                b'{"output_text":"OK","usage":{"input_tokens":7,'
-                b'"output_tokens":3,"total_tokens":10}}'
-            )
-
-    def fake_urlopen(request, timeout):
-        captured["url"] = request.full_url
-        captured["body"] = request.data.decode("utf-8")
-        captured["timeout"] = timeout
-        captured["authorization"] = request.get_header("Authorization")
-        return Response()
-
-    monkeypatch.setattr("memoryforge.agents.subagents.urllib.request.urlopen", fake_urlopen)
-    runner = OpenAIResponsesRunner(
-        api_key=None, model="gpt-5.2", base_url="https://opusmax.shop", timeout_s=12
-    )
-
-    response = runner.complete("Return OK.")
-
-    assert response.text == "OK"
-    assert response.input_tokens == 7
-    assert response.output_tokens == 3
-    assert response.total_tokens == 10
-    assert captured["url"] == "https://opusmax.shop/responses"
-    assert '"model": "gpt-5.2"' in captured["body"]
-    assert captured["authorization"] is None
-    assert captured["timeout"] == 12
-
-
-def test_openai_runner_reports_http_error_body(monkeypatch):
-    def fake_urlopen(request, timeout):
-        raise HTTPError(
-            request.full_url,
-            403,
-            "Forbidden",
-            hdrs={},
-            fp=BytesIO(b'{"error":"missing api key"}'),
-        )
-
-    monkeypatch.setattr("memoryforge.agents.subagents.urllib.request.urlopen", fake_urlopen)
-    runner = OpenAIResponsesRunner(api_key=None, model="gpt-5.2", base_url="https://opusmax.shop")
-
-    with pytest.raises(SubAgentRunnerError, match="missing api key"):
-        runner.complete("Return OK.")
-
-
-def test_openai_runner_marks_rate_limit_as_transient(monkeypatch):
-    def fake_urlopen(request, timeout):
-        raise HTTPError(
-            request.full_url,
-            429,
-            "Too Many Requests",
-            hdrs={},
-            fp=BytesIO(b'{"error":"rate limited"}'),
-        )
-
-    monkeypatch.setattr("memoryforge.agents.subagents.urllib.request.urlopen", fake_urlopen)
-    runner = OpenAIResponsesRunner(api_key=None, model="gpt-5.2", base_url="https://opusmax.shop")
-
-    with pytest.raises(TransientSubAgentRunnerError, match="rate limited"):
-        runner.complete("Return OK.")
-
-
-def test_openai_runner_accepts_extra_headers(monkeypatch):
-    captured = {}
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return None
-
-        def read(self):
-            return b'{"output_text":"OK"}'
-
-    def fake_urlopen(request, timeout):
-        captured["x_proxy_token"] = request.get_header("X-proxy-token")
-        return Response()
-
-    monkeypatch.setenv("MEMORYFORGE_OPENAI_HEADERS", '{"X-Proxy-Token":"abc"}')
-    monkeypatch.setattr("memoryforge.agents.subagents.urllib.request.urlopen", fake_urlopen)
-    runner = OpenAIResponsesRunner(api_key=None, model="gpt-5.2", base_url="https://opusmax.shop")
-
-    runner.complete("Return OK.")
-
-    assert captured["x_proxy_token"] == "abc"
+def test_openai_runner_name_is_not_supported():
+    with pytest.raises(SubAgentRunnerError, match="Unknown sub-agent runner"):
+        create_subagent_runner("openai")
 
 
 def test_auto_runner_ignores_openai_base_url_and_uses_codex(monkeypatch, tmp_path):

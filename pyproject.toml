@@ -3,7 +3,7 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "memoryforge"
+name = "memfg"
 version = "6.0.0"
 description = "Lossless Context Management for Recursive Language Model"
 readme = "README.md"
@@ -47,7 +47,7 @@ benchmark = [
     "tqdm>=4.0",
 ]
 
-all = ["memoryforge[embeddings,dev,benchmark]"]
+all = ["memfg[embeddings,dev,benchmark]"]
 
 [project.scripts]
 memoryforge = "memoryforge.cli:main"

@@ -1,11 +1,10 @@
-"""Agent runner and Codex/OpenAI sync helpers."""
+"""Agent runner and Codex sync helpers."""
 
 from memoryforge.agents.operators import SubAgentOperationResult, SubAgentOperator, SubAgentTask
 from memoryforge.agents.runners import (
     BaseSubAgentRunner,
     CodexSubAgentRunner,
     CommandSubAgentRunner,
-    OpenAIResponsesRunner,
     SubAgentResponse,
     SubAgentRunnerError,
     TransientSubAgentRunnerError,
@@ -16,7 +15,6 @@ __all__ = [
     "BaseSubAgentRunner",
     "CodexSubAgentRunner",
     "CommandSubAgentRunner",
-    "OpenAIResponsesRunner",
     "SubAgentOperationResult",
     "SubAgentOperator",
     "SubAgentResponse",

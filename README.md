@@ -51,13 +51,13 @@ help preserve and rehydrate the evidence needed after compaction.
 From PyPI in a project that uses `uv`:
 
 ```bash
-uv add memoryforge
+uv add memfg
 ```
 
 With optional local embeddings:
 
 ```bash
-uv add "memoryforge[embeddings]"
+uv add "memfg[embeddings]"
 ```
 
 For local development from this repository:
@@ -173,7 +173,7 @@ MemoryForge works without embeddings by using lexical/FTS retrieval. To enable
 semantic recall, install the embeddings extra and choose FastEmbed:
 
 ```bash
-uv add "memoryforge[embeddings]"
+uv add "memfg[embeddings]"
 
 export MEMORYFORGE_VECTOR_BACKEND=fastembed
 export MEMORYFORGE_VECTOR_MODEL=BAAI/bge-small-en-v1.5

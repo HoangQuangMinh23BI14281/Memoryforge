@@ -38,11 +38,11 @@ class LongTermRetrievalMixin:
     ) -> list[LongTermRecallResult]:
         limit = max(1, top_k)
         vector_results = self._vector_search(agent_id, query, limit * 4)
-        streams = {"vector": vector_results}
-        if not vector_results:
-            bm25_results = self._bm25_search(agent_id, query, limit * 4)
-            if bm25_results:
-                streams["bm25"] = bm25_results
+        bm25_results = self._bm25_search(agent_id, query, limit * 4)
+        streams = {
+            "bm25": bm25_results,
+            "vector": vector_results,
+        }
         fused_ids, stream_details = self._rrf(streams)
         selected_ids = self._select_ensemble_ids(fused_ids, streams, limit * 2)
         rows = self._fetch_items(selected_ids, include_content)
