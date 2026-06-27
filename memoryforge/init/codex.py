@@ -267,10 +267,10 @@ def _hook_command(
 ) -> str:
     if hook_runner.suffix.lower() == ".cmd":
         return (
-            f"{_cmd_quote(str(hook_runner))} {_cmd_quote(event)} "
-            f"--db {_cmd_quote(str(db_path))} "
-            f"--agent-id {_cmd_quote(agent_id)} "
-            f"--project-root {_cmd_quote(str(project_root))}"
+            f"{_cmd_path_arg(_relative_to_project(hook_runner, project_root))} {event} "
+            f"--db {_cmd_path_arg(_relative_to_project(db_path, project_root))} "
+            f"--agent-id {_cmd_value_arg(agent_id)} "
+            "--project-root ."
         )
     return (
         f"{shlex.quote(str(hook_runner))} {hook_event_arg(event)} "
@@ -284,7 +284,23 @@ def hook_event_arg(event: str) -> str:
     return shlex.quote(event)
 
 
-def _cmd_quote(value: str) -> str:
+def _relative_to_project(path: Path, project_root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(project_root.resolve()))
+    except ValueError:
+        return str(path)
+
+
+def _cmd_path_arg(value: str) -> str:
+    value = value.replace("/", "\\")
+    if " " not in value and "	" not in value:
+        return value
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _cmd_value_arg(value: str) -> str:
+    if " " not in value and "	" not in value:
+        return value
     return '"' + value.replace('"', '""') + '"'
 
 

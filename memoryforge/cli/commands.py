@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -39,15 +40,25 @@ def run_command(args: argparse.Namespace) -> int:
     if args.command == "hook":
         import sys
 
-        _print_json(
-            handle_hook_event(
+        stdin_text = sys.stdin.read()
+        try:
+            payload = handle_hook_event(
                 event=args.event,
                 db_path=args.db,
                 agent_id=args.agent_id,
                 project_root=args.project_root,
-                stdin_text=sys.stdin.read(),
+                stdin_text=stdin_text,
             )
-        )
+        except Exception as exc:
+            if os.environ.get("MEMORYFORGE_HOOK_STRICT") == "1":
+                raise
+            payload = {
+                "event": args.event,
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "skipped": "hook failure ignored",
+            }
+        _print_json(payload)
         return 0
     mf = MemoryForge(db_path=args.db)
     try:

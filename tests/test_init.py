@@ -58,6 +58,9 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
         "memoryforge-hook." in command and " user-prompt-submit " in f" {command} "
         for command in user_prompt_commands
     )
+    if os.name == "nt":
+        assert any(command.startswith(r".memoryforge\hooks\memoryforge-hook.cmd") for command in user_prompt_commands)
+        assert all(str(project) not in command for command in user_prompt_commands)
 
 
 def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path, monkeypatch):
