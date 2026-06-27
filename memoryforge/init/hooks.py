@@ -29,8 +29,15 @@ def handle_hook_event(
     session_id = _extract_session_id(payload)
 
     if event == "session-start":
+        from memoryforge.init.autoload import index_project_markdown
+
         removed = _cleanup_pending(project_root)
-        return {"event": event, "pending_cleaned": removed}
+        indexed = index_project_markdown(
+            db_path=db_path,
+            agent_id=agent_id,
+            project_root=project_root,
+        )
+        return {"event": event, "pending_cleaned": removed, "indexed": indexed}
 
     if event == "user-prompt-submit":
         pending_result: dict[str, Any] = {"event": event}

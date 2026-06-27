@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import mcp.types as types
@@ -348,7 +349,7 @@ if Server is not None:
 
     @app.call_tool()
     async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[Any]:
-        db_path = os.environ.get("MEMORYFORGE_DB", "~/.memoryforge/memory.db")
+        db_path = _resolve_mcp_db_path()
         if name == "store_conversation":
             result = store_conversation_tool(db_path, arguments)
             return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
@@ -403,6 +404,23 @@ if Server is not None:
         raise ValueError(f"Unknown tool: {name}")
 
 
+def _resolve_mcp_db_path() -> str:
+    configured = os.environ.get("MEMORYFORGE_DB")
+    if configured:
+        return configured
+    root = Path(os.getcwd()).resolve()
+    db_path = root / ".memoryforge" / "memory.db"
+    if os.environ.get("MEMORYFORGE_AUTO_INIT", "1").lower() not in {"0", "false", "no"}:
+        from memoryforge.init import ensure_project_initialized
+
+        ensure_project_initialized(
+            str(root),
+            agent_id=os.environ.get("MEMORYFORGE_AGENT_ID", "default"),
+            configure_codex=False,
+            auto_index=True,
+        )
+    return str(db_path)
+
 def run_server() -> None:
     if Server is None:
         raise RuntimeError("mcp is not installed; install memoryforge with MCP dependencies")
@@ -415,3 +433,4 @@ def run_server() -> None:
             await app.run(read_stream, write_stream, app.create_initialization_options())
 
     asyncio.run(run_stdio())
+

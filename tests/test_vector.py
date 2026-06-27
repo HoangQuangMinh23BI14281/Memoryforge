@@ -30,7 +30,8 @@ def _install_fake_fastembed(monkeypatch, dimensions=3):
     monkeypatch.setitem(sys.modules, "fastembed", fake_fastembed)
 
 
-def test_vector_index_without_model_disables_vector_search(tmp_path):
+def test_vector_index_explicit_disabled_backend_disables_vector_search(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
     index = VectorIndex(str(tmp_path / "memory.db"))
     index.add("doc-auth", "jwt authentication token secret")
     index.add("doc-db", "sqlite local database storage")

@@ -10,6 +10,12 @@ INTERSHIP_ROOT = Path("/mnt/c/users/admin/onedrive/desktop/intership")
 DEFAULT_REAL_DATA = INTERSHIP_ROOT / "data.md"
 
 
+@pytest.fixture(autouse=True)
+def _disable_vector_backend_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    if os.environ.get("MEMORYFORGE_VECTOR_BACKEND") is None:
+        monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+
+
 @pytest.fixture
 def real_data_path() -> Path:
     path = Path(os.environ.get("MEMORYFORGE_REAL_DATA_PATH", str(DEFAULT_REAL_DATA))).expanduser()

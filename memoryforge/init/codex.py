@@ -18,8 +18,22 @@ except ModuleNotFoundError:  # pragma: no cover
 MEMORYFORGE_MCP_NAME = "memoryforge"
 MEMORYFORGE_MCP_MARKER_START = "# --- MemoryForge MCP server ---"
 MEMORYFORGE_MCP_MARKER_END = "# --- end MemoryForge MCP server ---"
+MEMORYFORGE_AGENTS_MARKER_START = "<!-- MemoryForge instructions start -->"
+MEMORYFORGE_AGENTS_MARKER_END = "<!-- MemoryForge instructions end -->"
 
 
+
+MEMORYFORGE_AGENTS_CONTENT = """# MemoryForge Project Memory
+
+MemoryForge is configured for this project. Use its MCP tools before answering questions that depend on project history, prior conversation, Markdown notes, or oversized source context.
+
+- Use `recall_memory` for durable RLM/LTM recall. It combines BM25 and vector recall with RRF-style ranking where available.
+- Use `build_context_bundle` or `build_runtime_context_bundle` when a prompt needs grounded context for the core model.
+- Use `rlm_load`, `rlm_search`, and `rlm_chunk_get` for large files or documents instead of reading everything into the prompt.
+- Use `rlm_run` only when the task needs real Codex CLI sub-agent analysis over large context.
+- Store useful session evidence in LCM through MemoryForge hooks/MCP; do not create alternate memory folders.
+- The project-local database is `.memoryforge/memory.db` unless `MEMORYFORGE_DB` explicitly overrides it.
+"""
 class RegisterStatus(str, Enum):
     REGISTERED = "registered"
     ALREADY = "already"
@@ -133,6 +147,38 @@ def build_memoryforge_mcp_spec(db_path: Path) -> ServerSpec:
     )
 
 
+
+def build_global_memoryforge_mcp_spec() -> ServerSpec:
+    return ServerSpec(
+        name=MEMORYFORGE_MCP_NAME,
+        command="memoryforge-mcp",
+    )
+
+
+def install_codex_agents_md(agents_path: Path) -> None:
+    existing = ""
+    try:
+        existing = agents_path.read_text(encoding="utf-8")
+    except OSError:
+        existing = ""
+    block = (
+        f"{MEMORYFORGE_AGENTS_MARKER_START}\n"
+        f"{MEMORYFORGE_AGENTS_CONTENT.rstrip()}\n"
+        f"{MEMORYFORGE_AGENTS_MARKER_END}"
+    )
+    if MEMORYFORGE_AGENTS_MARKER_START in existing and MEMORYFORGE_AGENTS_MARKER_END in existing:
+        start = existing.index(MEMORYFORGE_AGENTS_MARKER_START)
+        end = existing.index(MEMORYFORGE_AGENTS_MARKER_END) + len(MEMORYFORGE_AGENTS_MARKER_END)
+        before = existing[:start].rstrip()
+        after = existing[end:].lstrip()
+        pieces = [piece for piece in (before, block, after) if piece]
+        content = "\n\n".join(pieces) + "\n"
+    elif existing.strip():
+        content = f"{existing.rstrip()}\n\n{block}\n"
+    else:
+        content = f"{block}\n"
+    agents_path.parent.mkdir(parents=True, exist_ok=True)
+    agents_path.write_text(content, encoding="utf-8")
 def install_codex_hooks(
     hooks_path: Path,
     *,
@@ -339,3 +385,5 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+

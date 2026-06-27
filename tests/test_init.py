@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 
@@ -23,18 +24,26 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
     src.mkdir()
     (src / "main.py").write_text("def hello():\n    return 'world'\n", encoding="utf-8")
 
+    monkeypatch.setenv("MEMORYFORGE_SUBAGENT_RUNNER", "mock")
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+
     result = init_project(str(project), agent_id="agent", force=True)
 
-    assert result["indexed"]["enabled"] is False
+    assert result["indexed"]["enabled"] is True
+    assert result["indexed"]["files"] == 1
+    assert result["indexed"]["chunks"] >= 1
+    assert result["indexed"]["long_term_items"] >= 1
     assert (project / ".codex" / "config.toml").exists()
     assert (project / ".memoryforge" / "hooks" / "memoryforge-hook.sh").exists()
     config_text = (project / ".codex" / "config.toml").read_text(encoding="utf-8")
     assert "# --- MemoryForge MCP server ---" in config_text
     assert "[mcp_servers.memoryforge]" in config_text
     assert 'args = ["run", "memoryforge-mcp"]' in config_text
+    assert (project / ".memoryforge" / "memory.db").exists()
     memoryforge_config = json.loads(
         (project / ".memoryforge" / "config.json").read_text(encoding="utf-8")
     )
+    assert memoryforge_config["auto_index"] is True
     assert memoryforge_config["subagent"]["runner"] == "codex"
     assert memoryforge_config["subagent"]["model"] == "gpt-5.4"
     hooks = json.loads((project / ".codex" / "hooks.json").read_text(encoding="utf-8"))
@@ -225,3 +234,91 @@ def test_hook_discards_pending_prompt_on_explicit_retract_event(tmp_path, monkey
     assert retract_result["pending_discarded"]["files"] == 1
     assert stop_result["committed"]["committed"] == 0
     assert long_term_hits == []
+
+def test_session_start_hook_indexes_markdown_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORYFORGE_SUBAGENT_RUNNER", "mock")
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    result = init_project(str(project), agent_id="agent", auto_index=False, force=True)
+    (project / "notes.md").write_text("Atlas session-start indexing amber-17", encoding="utf-8")
+
+    hook_result = handle_hook_event(
+        "session-start",
+        result["db_path"],
+        "agent",
+        str(project),
+        "{}",
+    )
+    mf = MemoryForge(result["db_path"])
+    try:
+        hits = mf.recall_long_term("agent", "session-start amber-17", top_k=3)
+    finally:
+        mf.close()
+
+    assert hook_result["indexed"]["enabled"] is True
+    assert hook_result["indexed"]["files"] == 1
+    assert any(hit["source_type"] == "rlm_chunk" for hit in hits)
+
+
+def test_init_writes_codex_agents_instructions(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _isolate_home(monkeypatch, home)
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+
+    result = init_project(str(project), agent_id="agent", force=True)
+    agents_text = (project / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "MemoryForge Project Memory" in agents_text
+    assert "recall_memory" in agents_text
+    assert "rlm_run" in agents_text
+    assert str(project / ".codex" / "AGENTS.md") in result["written"]
+
+
+def test_autoload_files_skips_unchanged_markdown_on_session_start(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORYFORGE_SUBAGENT_RUNNER", "mock")
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "README.md").write_text("Autoload manifest remembers amber cache", encoding="utf-8")
+    result = init_project(str(project), agent_id="agent", force=True)
+
+    hook_result = handle_hook_event(
+        "session-start",
+        result["db_path"],
+        "agent",
+        str(project),
+        "{}",
+    )
+    conn = sqlite3.connect(result["db_path"])
+    try:
+        row = conn.execute(
+            "SELECT path, buffer_id FROM autoload_files WHERE path = ?",
+            ("README.md",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert result["indexed"]["files"] == 1
+    assert hook_result["indexed"]["files"] == 0
+    assert hook_result["indexed"]["unchanged_files"] == 1
+    assert row is not None
+    assert row[0] == "README.md"
+
+
+def test_init_accepts_non_python_project(tmp_path, monkeypatch):
+    project = tmp_path / "plain-project"
+    project.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _isolate_home(monkeypatch, home)
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+
+    result = init_project(str(project), agent_id="agent", force=True)
+
+    assert (project / ".memoryforge" / "memory.db").exists()
+    assert result["project_root"] == str(project.resolve())

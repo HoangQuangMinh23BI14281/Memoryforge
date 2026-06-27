@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memfg"
-version = "6.0.0"
+version = "6.0.2"
 description = "Lossless Context Management for Recursive Language Model"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,11 +24,12 @@ dependencies = [
     "mcp>=1.0.0",
     "anyio>=4.0",
     "tomli>=2.0; python_version < '3.11'",
+    "fastembed>=0.5.0",
 ]
 
 [project.optional-dependencies]
-# Semantic embeddings (optional)
-embeddings = ["fastembed>=0.5.0"]
+# Semantic embeddings are installed by default; keep the extra for compatibility.
+embeddings = []
 
 # Development
 dev = [

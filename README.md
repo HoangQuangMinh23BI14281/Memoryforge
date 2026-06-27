@@ -54,11 +54,7 @@ From PyPI in a project that uses `uv`:
 uv add memfg
 ```
 
-With optional local embeddings:
-
-```bash
-uv add "memfg[embeddings]"
-```
+FastEmbed is installed by default with `memfg`, so semantic/vector recall is available without an extra package selector.
 
 For local development from this repository:
 
@@ -95,9 +91,11 @@ args = ["run", "memoryforge-mcp"]
 MEMORYFORGE_DB = "/absolute/path/.memoryforge/memory.db"
 ```
 
-The hook file records prompt and compaction lifecycle events. Project-local
-Codex hooks only run after the project `.codex/` layer is trusted by Codex.
-Inspect and trust them in the CLI with `/hooks` if Codex asks.
+The hook file records prompt and compaction lifecycle events. During init,
+MemoryForge also scans project Markdown files, loads them as RLM buffers/chunks,
+and indexes them into LTM/vector recall. Project-local Codex hooks only run
+after the project `.codex/` layer is trusted by Codex. Inspect and trust them
+in the CLI with `/hooks` if Codex asks.
 
 ## Prompt Submit, Cancel, And Retract
 
@@ -167,19 +165,17 @@ Run the MCP server directly:
 uv run memoryforge-mcp
 ```
 
-## Optional Vector Recall
+## Vector Recall
 
-MemoryForge works without embeddings by using lexical/FTS retrieval. To enable
-semantic recall, install the embeddings extra and choose FastEmbed:
+MemoryForge uses FastEmbed by default with `BAAI/bge-small-en-v1.5`, storing local
+embeddings in `vec_index`. No separate `memfg[embeddings]` install is required.
+You can select another local FastEmbed model with:
 
 ```bash
-uv add "memfg[embeddings]"
-
-export MEMORYFORGE_VECTOR_BACKEND=fastembed
 export MEMORYFORGE_VECTOR_MODEL=BAAI/bge-small-en-v1.5
-export MEMORYFORGE_REQUIRE_VECTOR_MODEL=1
 ```
 
+For explicit offline/test fallback only, set `MEMORYFORGE_VECTOR_BACKEND=disabled`.
 The project intentionally keeps one vector cache table, `vec_index`, and avoids
 SQLite extension backends such as `sqlite-vec` in the core release. This keeps
 the package easier to install, test, and publish.

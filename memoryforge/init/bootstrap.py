@@ -11,10 +11,13 @@ from typing import Any
 
 from memoryforge.agents.codex_sync import load_codex_defaults
 from memoryforge.db import init_memoryforge_schema
+from memoryforge.init.autoload import index_project_markdown
 from memoryforge.init.codex import (
     CodexMCPRegistrar,
     RegisterStatus,
+    build_global_memoryforge_mcp_spec,
     build_memoryforge_mcp_spec,
+    install_codex_agents_md,
     install_codex_hooks,
 )
 
@@ -25,12 +28,10 @@ def init_project(
     agent_id: str = "default",
     *,
     configure_codex: bool = True,
-    auto_index: bool = False,
+    auto_index: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
-    if not _looks_like_python_project(root):
-        raise ValueError(f"{root} does not look like a uv/Python project")
 
     memory_dir = root / ".memoryforge"
     hooks_dir = memory_dir / "hooks"
@@ -52,7 +53,13 @@ def init_project(
             )
         )
 
-    indexed = {"files": 0, "chunks": 0, "enabled": False}
+    indexed = {"files": 0, "chunks": 0, "long_term_items": 0, "enabled": False}
+    if auto_index:
+        indexed = index_project_markdown(
+            db_path=str(resolved_db),
+            agent_id=agent_id,
+            project_root=str(root),
+        )
     codex_defaults = load_codex_defaults(root)
     subagent_config: dict[str, Any] = {
         "runner": "codex",
@@ -72,7 +79,7 @@ def init_project(
                 "db_path": str(resolved_db),
                 "agent_id": agent_id,
                 "project_root": str(root),
-                "auto_index": False,
+                "auto_index": bool(auto_index),
                 "subagent": subagent_config,
             },
             indent=2,
@@ -90,8 +97,40 @@ def init_project(
     }
 
 
-def _looks_like_python_project(root: Path) -> bool:
-    return any((root / marker).exists() for marker in ("pyproject.toml", "setup.py", "uv.lock"))
+def ensure_project_initialized(
+    project_root: str = ".",
+    *,
+    agent_id: str = "default",
+    configure_codex: bool = False,
+    auto_index: bool = True,
+) -> dict[str, Any]:
+    root = Path(project_root).expanduser().resolve()
+    db_path = root / ".memoryforge" / "memory.db"
+    return init_project(
+        str(root),
+        db_path=str(db_path),
+        agent_id=agent_id,
+        configure_codex=configure_codex,
+        auto_index=auto_index,
+        force=False,
+    )
+
+
+def install_codex_global(*, force: bool = False) -> dict[str, Any]:
+    codex_dir = Path.home() / ".codex"
+    registrar = CodexMCPRegistrar(codex_dir)
+    result = registrar.register_server(build_global_memoryforge_mcp_spec(), force=force)
+    if result.status in {RegisterStatus.MISMATCH, RegisterStatus.FAILED}:
+        raise ValueError(f"Could not configure global Codex MCP delivery: {result.detail}")
+    agents_path = codex_dir / "AGENTS.md"
+    install_codex_agents_md(agents_path)
+    return {
+        "codex_dir": str(codex_dir),
+        "config_path": str(codex_dir / "config.toml"),
+        "agents_path": str(agents_path),
+        "status": result.status.value,
+        "detail": result.detail,
+    }
 
 
 def _write_hook_runner(root: Path, hooks_dir: Path, *, force: bool) -> Path:
@@ -124,6 +163,7 @@ def _write_codex_settings(
     codex_dir.mkdir(parents=True, exist_ok=True)
     config_path = codex_dir / "config.toml"
     hooks_path = codex_dir / "hooks.json"
+    agents_path = codex_dir / "AGENTS.md"
 
     result = CodexMCPRegistrar(codex_dir).register_server(
         build_memoryforge_mcp_spec(db_path), force=force
@@ -138,4 +178,6 @@ def _write_codex_settings(
         project_root=root,
         hook_runner=hook_runner,
     )
-    return [config_path, hooks_path]
+    install_codex_agents_md(agents_path)
+    return [config_path, hooks_path, agents_path]
+

@@ -1475,17 +1475,17 @@ wheels = [
 
 [[package]]
 name = "memfg"
-version = "6.0.0"
+version = "6.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
+    { name = "fastembed" },
     { name = "mcp" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
 [package.optional-dependencies]
 all = [
-    { name = "fastembed" },
     { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "matplotlib", version = "3.11.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "mypy" },
@@ -1513,14 +1513,11 @@ dev = [
     { name = "ruff" },
     { name = "twine" },
 ]
-embeddings = [
-    { name = "fastembed" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
-    { name = "fastembed", marker = "extra == 'embeddings'", specifier = ">=0.5.0" },
+    { name = "fastembed", specifier = ">=0.5.0" },
     { name = "matplotlib", marker = "extra == 'benchmark'", specifier = ">=3.7" },
     { name = "mcp", specifier = ">=1.0.0" },
     { name = "memfg", extras = ["embeddings", "dev", "benchmark"], marker = "extra == 'all'" },

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from memoryforge.api import MemoryForge
-from memoryforge.init import handle_hook_event, init_project
+from memoryforge.init import handle_hook_event, init_project, install_codex_global
 
 
 def _print_json(payload: Any) -> None:
@@ -21,6 +21,9 @@ def run_command(args: argparse.Namespace) -> int:
 
         run_server()
         return 0
+    if args.command == "install-codex":
+        _print_json(install_codex_global(force=args.force))
+        return 0
     if args.command == "init":
         _print_json(
             init_project(
@@ -28,6 +31,7 @@ def run_command(args: argparse.Namespace) -> int:
                 db_path=args.db,
                 agent_id=args.agent_id,
                 configure_codex=not args.no_codex,
+                auto_index=not args.no_index,
                 force=args.force,
             )
         )
@@ -364,3 +368,4 @@ def run_command(args: argparse.Namespace) -> int:
     finally:
         mf.close()
     return 0
+

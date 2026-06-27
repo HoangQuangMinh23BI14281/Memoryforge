@@ -115,10 +115,9 @@ class _DisabledEmbedder:
 class VectorIndex:
     """SQLite-persistent vector index.
 
-    Uses a real configured embedding backend when available. If no semantic
-    model can be loaded, vector search is disabled and callers should rely on
-    lexical/BM25 retrieval. Hashing is intentionally not used for semantic
-    search.
+    Uses FastEmbed by default so PyPI installs have semantic recall ready.
+    Set MEMORYFORGE_VECTOR_BACKEND=disabled only for explicit offline/test
+    fallback. Hashing is intentionally not used for semantic search.
     """
 
     def __init__(
@@ -159,20 +158,13 @@ class VectorIndex:
                 f"Unsupported vector backend {resolved_backend!r}. "
                 "MemoryForge supports 'fastembed' or lexical-only fallback."
             )
-        if not resolved_model and resolved_backend == "auto":
-            if require_vector_model:
-                raise RuntimeError(
-                    "A required vector model needs MEMORYFORGE_VECTOR_MODEL "
-                    "or VectorIndex(model_name=...)"
-                )
-            return _DisabledEmbedder(dimensions=dimensions), "disabled"
         if not resolved_model:
             resolved_model = DEFAULT_FASTEMBED_MODEL
 
         try:
             return _FastEmbedder(resolved_model), "fastembed"
         except Exception as exc:
-            if require_vector_model or resolved_backend == "fastembed":
+            if require_vector_model or resolved_backend in {"auto", "fastembed"}:
                 raise RuntimeError(
                     f"Failed to load required vector model {resolved_model!r} "
                     f"with FastEmbed: {exc}"
