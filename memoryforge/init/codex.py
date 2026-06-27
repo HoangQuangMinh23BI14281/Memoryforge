@@ -237,11 +237,23 @@ def _without_memoryforge_hooks(value: Any) -> list[dict[str, Any]]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        if "memoryforge hook" in json.dumps(item) or "memoryforge-hook" in json.dumps(item):
+        if _looks_like_memoryforge_hook(item):
             continue
         entries.append(item)
     return entries
 
+
+def _looks_like_memoryforge_hook(item: dict[str, Any]) -> bool:
+    dumped = json.dumps(item)
+    return any(
+        marker in dumped
+        for marker in (
+            "memoryforge hook",
+            "memoryforge.exe hook",
+            "memoryforge-hook",
+            "memoryforge.cli.main hook",
+        )
+    )
 
 def _hook_group(
     command: str, *, matcher: str | None, status_message: str
@@ -249,7 +261,7 @@ def _hook_group(
     handler: dict[str, Any] = {
         "type": "command",
         "command": command,
-        "timeout": 120,
+        "timeout": 20,
         "statusMessage": status_message,
     }
     group: dict[str, Any] = {"hooks": [handler]}
@@ -266,8 +278,9 @@ def _hook_command(
     project_root: Path,
 ) -> str:
     if hook_runner.suffix.lower() == ".cmd":
+        runner = project_root / ".venv" / "Scripts" / "memoryforge.exe"
         return (
-            f"{_cmd_path_arg(_relative_to_project(hook_runner, project_root))} {event} "
+            f"{_cmd_path_arg(_relative_to_project(runner, project_root))} hook {event} "
             f"--db {_cmd_path_arg(_relative_to_project(db_path, project_root))} "
             f"--agent-id {_cmd_value_arg(agent_id)} "
             "--project-root ."

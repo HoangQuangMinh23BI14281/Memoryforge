@@ -55,11 +55,11 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
         for handler in group.get("hooks", [])
     ]
     assert any(
-        "memoryforge-hook." in command and " user-prompt-submit " in f" {command} "
+        "memoryforge.exe hook" in command and " user-prompt-submit " in f" {command} "
         for command in user_prompt_commands
     )
     if os.name == "nt":
-        assert any(command.startswith(r".memoryforge\hooks\memoryforge-hook.cmd") for command in user_prompt_commands)
+        assert any(command.startswith(r".venv\Scripts\memoryforge.exe hook") for command in user_prompt_commands)
         assert all(str(project) not in command for command in user_prompt_commands)
 
 
@@ -103,7 +103,7 @@ def test_init_merges_codex_hooks_without_clobbering_user_hooks(tmp_path, monkeyp
         handler["command"]
         for group in hooks["Stop"]
         for handler in group.get("hooks", [])
-        if "memoryforge-hook." in handler.get("command", "")
+        if "memoryforge.exe hook" in handler.get("command", "")
         and " stop " in f" {handler.get('command', '')} "
     ]
     assert len(memoryforge_stop_hooks) == 1
