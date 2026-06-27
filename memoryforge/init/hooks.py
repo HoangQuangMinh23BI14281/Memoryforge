@@ -271,5 +271,13 @@ def _read_pending_file(path: Path) -> dict[str, Any]:
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     tmp_path = path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    body = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    tmp_path.write_text(body, encoding="utf-8")
+    try:
+        tmp_path.replace(path)
+    except PermissionError:
+        path.write_text(body, encoding="utf-8")
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
