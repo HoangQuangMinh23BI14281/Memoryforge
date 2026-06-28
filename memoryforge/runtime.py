@@ -66,46 +66,30 @@ def resolve_runtime_integration(
     if requested not in {"auto", "codex"}:
         raise RuntimeIntegrationError(f"Unsupported MemoryForge runtime: {runtime}")
 
-    codex_dir = root / ".codex"
-    config_path = codex_dir / "config.toml"
-    hooks_path = codex_dir / "hooks.json"
+    agents_path = root / "AGENTS.md"
     mf_config_path = root / ".memoryforge" / "config.json"
-    has_codex = codex_dir.exists() or config_path.exists() or hooks_path.exists()
-    if requested == "auto" and not has_codex:
+    agents_configured = _agents_memoryforge_configured(agents_path)
+    if requested == "auto" and not agents_configured:
         raise RuntimeIntegrationError(
-            "Could not identify active runtime. Run `memoryforge init <project>` "
-            "or pass --runtime codex for a configured Codex project."
+            "Could not identify active Codex MemoryForge instructions. Run `memoryforge init <project>` first."
         )
 
     memoryforge_config = _load_json(mf_config_path)
-    mcp_configured = _codex_memoryforge_mcp_configured(config_path)
-    hooks_configured = _codex_hooks_configured(hooks_path)
+    mcp_configured = agents_configured
+    hooks_configured = False
     memoryforge_configured = bool(memoryforge_config)
-    if not mcp_configured:
-        raise RuntimeIntegrationError(
-            "Codex runtime is missing MemoryForge MCP delivery. "
-            "Run `memoryforge init <project>` so the core model can call "
-            "`build_context_bundle` instead of MemoryForge spawning an answer model."
-        )
     if not memoryforge_configured:
         raise RuntimeIntegrationError(
             "MemoryForge project config is missing. Run `memoryforge init <project>` first."
+        )
+    if not mcp_configured:
+        raise RuntimeIntegrationError(
+            "Project AGENTS.md is missing MemoryForge instructions. Run `memoryforge init <project>` first."
         )
     memoryforge_db_path = _memoryforge_config_db_path(memoryforge_config, root)
     if memoryforge_db_path is None:
         raise RuntimeIntegrationError(
             "MemoryForge project config is missing db_path. Run `memoryforge init <project>` first."
-        )
-    mcp_db_path = _codex_memoryforge_mcp_db_path(config_path, root)
-    if mcp_db_path is None:
-        raise RuntimeIntegrationError(
-            "Codex MemoryForge MCP delivery is missing MEMORYFORGE_DB. "
-            "Run `memoryforge init <project>` so the core runtime reads the same database."
-        )
-    if mcp_db_path != memoryforge_db_path:
-        raise RuntimeIntegrationError(
-            "Codex MemoryForge MCP delivery points at a different database than "
-            ".memoryforge/config.json."
         )
     if expected_db_path is not None:
         expected = _resolve_project_path(expected_db_path, root)
@@ -121,7 +105,7 @@ def resolve_runtime_integration(
         mcp_configured=mcp_configured,
         hooks_configured=hooks_configured,
         memoryforge_configured=memoryforge_configured,
-        config_path=str(mf_config_path),
+        config_path=str(agents_path),
         diagnostics={
             "answer_model_used": False,
             "subagent_runner_used": False,
@@ -132,6 +116,13 @@ def resolve_runtime_integration(
     )
 
 
+
+def _agents_memoryforge_configured(agents_path: Path) -> bool:
+    try:
+        text = agents_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return "<!-- MemoryForge instructions start -->" in text and "recall_memory" in text
 def _codex_memoryforge_mcp_configured(config_path: Path) -> bool:
     return _codex_memoryforge_mcp_server(config_path) is not None
 

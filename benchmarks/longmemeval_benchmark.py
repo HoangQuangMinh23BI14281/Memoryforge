@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Run LongMemEval through the intended MemoryForge pipeline.
 
 Pipeline:
@@ -44,7 +44,7 @@ BENCHMARK_MODE_CONTRACTS: dict[str, dict[str, bool | str]] = {
         "ingests": True,
         "builds_context_bundle": False,
         "uses_core_answer_runner": False,
-        "uses_rlm_worker": False,
+        "uses_rlm_worker": True,
         "uses_lcm_worker": False,
         "produces_prediction": False,
         "requires_runner": False,
@@ -64,7 +64,7 @@ BENCHMARK_MODE_CONTRACTS: dict[str, dict[str, bool | str]] = {
         "ingests": True,
         "builds_context_bundle": True,
         "uses_core_answer_runner": True,
-        "uses_rlm_worker": False,
+        "uses_rlm_worker": True,
         "uses_lcm_worker": False,
         "produces_prediction": True,
         "requires_runner": True,
@@ -84,7 +84,7 @@ BENCHMARK_MODE_CONTRACTS: dict[str, dict[str, bool | str]] = {
         "ingests": True,
         "builds_context_bundle": False,
         "uses_core_answer_runner": False,
-        "uses_rlm_worker": False,
+        "uses_rlm_worker": True,
         "uses_lcm_worker": True,
         "produces_prediction": False,
         "requires_runner": True,
@@ -796,6 +796,7 @@ def _run_case(
                 "rlm_deduped": bool(loaded.get("rlm_deduped")),
                 "ltm_deduped": bool(loaded.get("ltm_deduped")),
                 "answer_evidence_annotation": answer_evidence_annotation,
+                "rlm_worker": loaded.get("rlm_worker"),
                 "db_counts": _db_counts(mf.db_path),
             },
         }
@@ -859,6 +860,7 @@ def _run_case(
                 "rlm_deduped": bool(loaded.get("rlm_deduped")),
                 "ltm_deduped": bool(loaded.get("ltm_deduped")),
                 "answer_evidence_annotation": answer_evidence_annotation,
+                "rlm_worker": loaded.get("rlm_worker"),
                 "dag": _dag_diagnostics(mf, session_id),
                 "compaction": None
                 if compaction_result is None
@@ -908,6 +910,7 @@ def _run_case(
         "rlm_deduped": bool(loaded.get("rlm_deduped")) if loaded else True,
         "ltm_deduped": bool(loaded.get("ltm_deduped")) if loaded else True,
         "answer_evidence_annotation": answer_evidence_annotation,
+        "rlm_worker": loaded.get("rlm_worker") if loaded else None,
         "ingestion": {
             "performed": loaded is not None,
             "preingested_ltm_count": preingested_ltm_count,
@@ -1109,7 +1112,7 @@ def main() -> int:
     parser.add_argument("dataset")
     parser.add_argument("--db", default="~/.memoryforge/memory.db")
     parser.add_argument("--agent-id", default="benchmark")
-    parser.add_argument("--limit", type=int, default=40, help="0 means all dataset cases")
+    parser.add_argument("--limit", type=int, default=100, help="0 means all dataset cases")
     parser.add_argument(
         "--start-index", type=int, default=1, help="1-based first dataset case index"
     )
@@ -1148,7 +1151,7 @@ def main() -> int:
         "--rlm-max-workers",
         type=int,
         default=int(os.environ.get("MEMORYFORGE_RLM_MAX_WORKERS", "1")),
-        help="Maximum parallel RLM analysis sub-agents in rlm-worker mode.",
+        help="Maximum parallel RLM analysis sub-agents in modes that execute the RLM worker.",
     )
     parser.add_argument(
         "--vector-model", default=os.environ.get("MEMORYFORGE_VECTOR_MODEL") or DEFAULT_VECTOR_MODEL
@@ -1288,3 +1291,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

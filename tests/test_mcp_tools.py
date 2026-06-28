@@ -5,23 +5,13 @@ import anyio
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-from memoryforge.init import init_project
 from memoryforge.mcp.tools import (
-    active_recall_tool,
     autoload_markdown_tool,
     build_context_bundle_tool,
-    build_runtime_context_bundle_tool,
     ensure_project_memory_tool,
-    find_contradictions_tool,
-    ingest_file_tool,
-    recall_conversation_tool,
-    record_contradiction_tool,
-    record_correction_tool,
-    rlm_aggregate_tool,
+    recall_memory_tool,
     rlm_chunk_get_tool,
-    rlm_dispatch_tool,
     rlm_load_tool,
-    rlm_record_tool,
     rlm_run_tool,
     rlm_search_tool,
     store_conversation_tool,
@@ -47,9 +37,11 @@ def test_mcp_server_stdio_handshake(tmp_path):
         assert any(tool.name == "ensure_project_memory" for tool in tools.tools)
         assert any(tool.name == "autoload_markdown" for tool in tools.tools)
         assert any(tool.name == "rlm_run" for tool in tools.tools)
-        assert any(tool.name == "record_contradiction" for tool in tools.tools)
-        assert any(tool.name == "find_contradictions" for tool in tools.tools)
-        assert any(tool.name == "build_runtime_context_bundle" for tool in tools.tools)
+        tool_names = {tool.name for tool in tools.tools}
+        assert "recall" not in tool_names
+        assert "record_contradiction" not in tool_names
+        assert "rlm_dispatch" not in tool_names
+        assert "build_runtime_context_bundle" not in tool_names
 
     anyio.run(smoke)
 
@@ -98,7 +90,11 @@ def check():
     assert ensured["hooks_enabled"] is False
     assert autoloaded["enabled"] is True
     assert stored["count"] == 1
-    assert recall_conversation_tool(db_path, {"agent_id": "agent", "query": "Health"})["results"]
+    recalled = recall_memory_tool(
+        db_path,
+        {"agent_id": "agent", "query": "Health route", "include_content": True},
+    )
+    assert recalled["results"]
     bundle = build_context_bundle_tool(
         db_path,
         {
@@ -112,42 +108,6 @@ def check():
     assert bundle["diagnostics"]["answer_model_used"] is False
     assert bundle["messages"][0]["source"] == "active_recall"
     assert any(message["source"] == "long_term" for message in bundle["messages"])
-    correction = record_correction_tool(
-        db_path,
-        {
-            "agent_id": "agent",
-            "session_id": "s1",
-            "corrected_fact": "Health route uses check and returns True.",
-        },
-    )
-    assert correction["metadata"]["kind"] == "correction"
-    assert correction["metadata"]["confidence"] == "high"
-    contradiction = record_contradiction_tool(
-        db_path,
-        {
-            "agent_id": "agent",
-            "session_id": "s1",
-            "statement": "Health route is owned by runtime.",
-            "conflicting_item_ids": [correction["item_id"]],
-        },
-    )
-    contradictions = find_contradictions_tool(
-        db_path,
-        {"agent_id": "agent", "query": "Health route", "include_content": True},
-    )
-    contradiction_ids = {item["item_id"] for item in contradictions["results"]}
-    assert contradiction["item_id"] in contradiction_ids
-    assert contradictions["diagnostics"]["answer_model_used"] is False
-    active = active_recall_tool(db_path, {"agent_id": "agent", "session_id": "s1", "limit": 3})
-    assert active["diagnostics"]["query_required"] is False
-    assert any(item["metadata"]["kind"] == "correction" for item in active["results"])
-
-    file_ingest = ingest_file_tool(
-        db_path,
-        {"agent_id": "agent", "path": str(project / "app.py"), "chunk_size": 1000},
-    )
-    assert file_ingest["long_term_item_ids"]
-    assert file_ingest["source_type"] == "rlm_chunk"
 
     loaded = rlm_load_tool(
         db_path,
@@ -164,23 +124,6 @@ def check():
     )
     chunk_id = searched["results"][0]["chunk_id"]
     assert "Alice" in rlm_chunk_get_tool(db_path, {"chunk_id": chunk_id})["chunk"]["content"]
-    dispatched = rlm_dispatch_tool(
-        db_path,
-        {"agent_id": "agent", "buffer_id": loaded["buffer_id"], "batch_size": 1},
-    )
-    recorded = rlm_record_tool(
-        db_path,
-        {
-            "agent_id": "agent",
-            "run_id": dispatched["run_id"],
-            "chunk_ids": [chunk_id],
-            "analysis": "Alice owns auth.",
-            "batch_index": 0,
-        },
-    )
-    aggregated = rlm_aggregate_tool(db_path, {"agent_id": "agent", "run_id": dispatched["run_id"]})
-    assert recorded["summary_node_id"] in aggregated["child_node_ids"]
-
     auto_run = rlm_run_tool(
         db_path,
         {
@@ -194,36 +137,3 @@ def check():
     )
     assert auto_run["runner"] == "mock"
     assert auto_run["aggregate"]["summary_node_id"]
-
-
-def test_mcp_runtime_context_bundle_validates_core_runtime_delivery(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
-    initialized = init_project(str(project), agent_id="agent", force=True)
-
-    stored = store_conversation_tool(
-        initialized["db_path"],
-        {
-            "agent_id": "agent",
-            "session_id": "s1",
-            "turns": [{"role": "user", "content": "Project Atlas uses SQLite memory."}],
-        },
-    )
-    bundle = build_runtime_context_bundle_tool(
-        initialized["db_path"],
-        {
-            "agent_id": "agent",
-            "session_id": "s1",
-            "query": "Project Atlas memory",
-            "project_root": str(project),
-            "top_k": 3,
-        },
-    )
-
-    assert stored["count"] == 1
-    assert bundle["runtime"]["runtime"] == "codex"
-    assert bundle["delivery"] == "mcp:build_context_bundle"
-    assert bundle["context_bundle"]["diagnostics"]["bundle_only"] is True
-    assert bundle["context_bundle"]["diagnostics"]["answer_model_used"] is False
-    assert bundle["context_bundle"]["diagnostics"]["runtime"]["db_path_verified"] is True

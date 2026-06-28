@@ -11,22 +11,12 @@ import mcp.types as types
 from mcp.server import Server
 
 from memoryforge.mcp.tools import (
-    active_recall_tool,
     autoload_markdown_tool,
     build_context_bundle_tool,
-    build_runtime_context_bundle_tool,
     ensure_project_memory_tool,
-    find_contradictions_tool,
-    ingest_file_tool,
-    recall_conversation_tool,
     recall_memory_tool,
-    record_contradiction_tool,
-    record_correction_tool,
-    rlm_aggregate_tool,
     rlm_chunk_get_tool,
-    rlm_dispatch_tool,
     rlm_load_tool,
-    rlm_record_tool,
     rlm_run_tool,
     rlm_search_tool,
     store_conversation_tool,
@@ -40,13 +30,13 @@ if Server is not None:
         return [
             types.Tool(
                 name="ensure_project_memory",
-                description="Ensure .memoryforge state exists for the current project and bootstrap Markdown autoload metadata",
+                description="Ensure lightweight .memoryforge state exists for the current project. Does not index unless auto_index is explicitly true.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "agent_id": {"type": "string"},
                         "project_root": {"type": "string"},
-                        "auto_index": {"type": "boolean", "default": True},
+                        "auto_index": {"type": "boolean", "default": False},
                     },
                 },
             ),
@@ -66,114 +56,23 @@ if Server is not None:
                 },
             ),
             types.Tool(
-                name="store_conversation",
-                description="Store conversation turns in MemoryForge",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "session_id": {"type": "string"},
-                        "turns": {"type": "array"},
-                    },
-                    "required": ["agent_id", "turns"],
-                },
-            ),
-            types.Tool(
-                name="recall",
-                description="Search conversation memory",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "query": {"type": "string"},
-                        "top_k": {"type": "integer", "default": 10},
-                    },
-                    "required": ["agent_id", "query"],
-                },
-            ),
-            types.Tool(
-                name="recall_conversation",
-                description="Search stored conversation turns",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "query": {"type": "string"},
-                        "top_k": {"type": "integer", "default": 10},
-                    },
-                    "required": ["agent_id", "query"],
-                },
-            ),
-            types.Tool(
                 name="recall_memory",
-                description="Recall long-term memory through BM25 and vector indexes",
+                description="Recall long-term project memory through BM25 and vector indexes",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "agent_id": {"type": "string"},
                         "query": {"type": "string"},
                         "session_id": {"type": "string"},
-                        "top_k": {"type": "integer", "default": 10},
-                        "include_content": {"type": "boolean", "default": False},
+                        "top_k": {"type": "integer", "default": 8},
+                        "include_content": {"type": "boolean", "default": True},
                     },
                     "required": ["agent_id", "query"],
-                },
-            ),
-            types.Tool(
-                name="record_correction",
-                description="Record a user correction as high-confidence long-term memory",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "corrected_fact": {"type": "string"},
-                        "wrong_item_id": {"type": "string"},
-                        "wrong_raw_ref": {"type": "string"},
-                        "session_id": {"type": "string"},
-                        "source": {"type": "string", "default": "user"},
-                    },
-                    "required": ["agent_id", "corrected_fact"],
-                },
-            ),
-            types.Tool(
-                name="record_contradiction",
-                description="Record a contested memory relation without choosing a winner",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "statement": {"type": "string"},
-                        "conflicting_item_ids": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "conflicting_raw_refs": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "session_id": {"type": "string"},
-                        "source": {"type": "string", "default": "user"},
-                    },
-                    "required": ["agent_id", "statement"],
-                },
-            ),
-            types.Tool(
-                name="find_contradictions",
-                description="List memories marked as conflicting through contradiction metadata",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "query": {"type": "string"},
-                        "limit": {"type": "integer", "default": 10},
-                        "include_content": {"type": "boolean", "default": False},
-                    },
-                    "required": ["agent_id"],
                 },
             ),
             types.Tool(
                 name="build_context_bundle",
-                description="Build a MemoryForge context bundle for the active core model without answering",
+                description="Build grounded LCM/LTM context for the core model without answering",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -182,11 +81,11 @@ if Server is not None:
                         "query": {"type": "string"},
                         "system_prompt": {"type": "string"},
                         "top_k": {"type": "integer", "default": 5},
-                        "include_content": {"type": "boolean", "default": False},
+                        "include_content": {"type": "boolean", "default": True},
                         "recall_content_policy": {
                             "type": "string",
                             "enum": ["snippet", "champion", "full", "auto", "preview"],
-                            "default": "snippet",
+                            "default": "champion",
                         },
                         "long_term_token_budget": {"type": "integer"},
                         "model_context_limit": {"type": "integer"},
@@ -198,70 +97,21 @@ if Server is not None:
                 },
             ),
             types.Tool(
-                name="build_runtime_context_bundle",
-                description=(
-                    "Validate active runtime delivery and build a MemoryForge context bundle "
-                    "for the core model without answering"
-                ),
+                name="store_conversation",
+                description="Store conversation turns in MemoryForge LCM",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "agent_id": {"type": "string"},
                         "session_id": {"type": "string"},
-                        "query": {"type": "string"},
-                        "project_root": {"type": "string"},
-                        "runtime": {"type": "string", "enum": ["auto", "codex"], "default": "auto"},
-                        "system_prompt": {"type": "string"},
-                        "top_k": {"type": "integer", "default": 5},
-                        "include_content": {"type": "boolean", "default": False},
-                        "recall_content_policy": {
-                            "type": "string",
-                            "enum": ["snippet", "champion", "full", "auto", "preview"],
-                            "default": "snippet",
-                        },
-                        "long_term_token_budget": {"type": "integer"},
-                        "model_context_limit": {"type": "integer"},
-                        "reserved_output_tokens": {"type": "integer"},
-                        "compaction_buffer": {"type": "integer"},
-                        "soft_threshold_fraction": {"type": "number"},
+                        "turns": {"type": "array"},
                     },
-                    "required": ["agent_id", "session_id", "query", "project_root"],
-                },
-            ),
-            types.Tool(
-                name="active_recall",
-                description="Proactively surface recent durable evidence for the active core model without answering",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "session_id": {"type": "string"},
-                        "focus": {"type": "string"},
-                        "project_root": {"type": "string"},
-                        "limit": {"type": "integer", "default": 8},
-                        "include_content": {"type": "boolean", "default": False},
-                    },
-                    "required": ["agent_id"],
-                },
-            ),
-            types.Tool(
-                name="ingest_file",
-                description="Ingest a file into immutable file chunks and long-term memory without adding it to LCM",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "path": {"type": "string"},
-                        "name": {"type": "string"},
-                        "chunk_size": {"type": "integer", "default": 12000},
-                        "overlap": {"type": "integer", "default": 1000},
-                    },
-                    "required": ["agent_id", "path"],
+                    "required": ["agent_id", "turns"],
                 },
             ),
             types.Tool(
                 name="rlm_load",
-                description="Load oversized content or a file into RLM buffers/chunks and LTM without adding it to LCM",
+                description="Load oversized content or a file into RLM chunks and LTM without sub-agent analysis",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -277,14 +127,14 @@ if Server is not None:
             ),
             types.Tool(
                 name="rlm_search",
-                description="Search RLM chunks; returns chunk IDs and previews only",
+                description="Search RLM chunks and return chunk IDs/previews",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "agent_id": {"type": "string"},
                         "query": {"type": "string"},
                         "buffer_id": {"type": "string"},
-                        "top_k": {"type": "integer", "default": 10},
+                        "top_k": {"type": "integer", "default": 8},
                         "mode": {"type": "string", "default": "hybrid"},
                     },
                     "required": ["agent_id", "query"],
@@ -300,51 +150,8 @@ if Server is not None:
                 },
             ),
             types.Tool(
-                name="rlm_dispatch",
-                description="Create pass-by-reference chunk batches for external sub-agents",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "buffer_id": {"type": "string"},
-                        "query": {"type": "string"},
-                        "limit": {"type": "integer", "default": 20},
-                        "batch_size": {"type": "integer"},
-                    },
-                    "required": ["agent_id"],
-                },
-            ),
-            types.Tool(
-                name="rlm_record",
-                description="Record a sub-agent finding as an LCM SummaryDAG leaf",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "run_id": {"type": "string"},
-                        "chunk_ids": {"type": "array", "items": {"type": "string"}},
-                        "analysis": {"type": "string"},
-                        "batch_index": {"type": "integer"},
-                    },
-                    "required": ["agent_id", "run_id", "chunk_ids", "analysis"],
-                },
-            ),
-            types.Tool(
-                name="rlm_aggregate",
-                description="Aggregate recorded RLM findings into an LCM SummaryDAG parent",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {"type": "string"},
-                        "run_id": {"type": "string"},
-                        "summary": {"type": "string"},
-                    },
-                    "required": ["agent_id", "run_id"],
-                },
-            ),
-            types.Tool(
                 name="rlm_run",
-                description="Run RLM with spawned sub-agents and store results in LCM",
+                description="Run RLM with real sub-agents for explicit deep analysis over large context",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -375,68 +182,25 @@ if Server is not None:
                 },
             ),
         ]
-
     @app.call_tool()
     async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[Any]:
         db_path = _resolve_mcp_db_path()
-        if name == "ensure_project_memory":
-            result = ensure_project_memory_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "autoload_markdown":
-            result = autoload_markdown_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "store_conversation":
-            result = store_conversation_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name in {"recall", "recall_conversation"}:
-            result = recall_conversation_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "recall_memory":
-            result = recall_memory_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "record_correction":
-            result = record_correction_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "record_contradiction":
-            result = record_contradiction_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "find_contradictions":
-            result = find_contradictions_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "build_context_bundle":
-            result = build_context_bundle_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "build_runtime_context_bundle":
-            result = build_runtime_context_bundle_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "active_recall":
-            result = active_recall_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "ingest_file":
-            result = ingest_file_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "rlm_load":
-            result = rlm_load_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "rlm_search":
-            result = rlm_search_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "rlm_chunk_get":
-            result = rlm_chunk_get_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "rlm_dispatch":
-            result = rlm_dispatch_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "rlm_record":
-            result = rlm_record_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "rlm_aggregate":
-            result = rlm_aggregate_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        if name == "rlm_run":
-            result = rlm_run_tool(db_path, arguments)
-            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-        raise ValueError(f"Unknown tool: {name}")
+        handlers = {
+            "ensure_project_memory": ensure_project_memory_tool,
+            "autoload_markdown": autoload_markdown_tool,
+            "recall_memory": recall_memory_tool,
+            "build_context_bundle": build_context_bundle_tool,
+            "store_conversation": store_conversation_tool,
+            "rlm_load": rlm_load_tool,
+            "rlm_search": rlm_search_tool,
+            "rlm_chunk_get": rlm_chunk_get_tool,
+            "rlm_run": rlm_run_tool,
+        }
+        handler = handlers.get(name)
+        if handler is None:
+            raise ValueError(f"Unknown tool: {name}")
+        result = handler(db_path, arguments)
+        return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
 
 
 def _resolve_mcp_db_path() -> str:
@@ -452,7 +216,7 @@ def _resolve_mcp_db_path() -> str:
             str(root),
             agent_id=os.environ.get("MEMORYFORGE_AGENT_ID", "default"),
             configure_codex=False,
-            auto_index=True,
+            auto_index=False,
         )
     return str(db_path)
 

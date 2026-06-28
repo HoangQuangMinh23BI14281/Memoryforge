@@ -1,6 +1,6 @@
 # MemoryForge
 
-MemoryForge is a local-first memory layer for Codex CLI workflows.
+MemoryForge is an MCP-first, local-first memory layer for Codex CLI workflows.
 
 It stores durable project evidence in SQLite, keeps live context bounded, and
 returns source-backed context bundles to the model the user is already running.
@@ -12,7 +12,8 @@ provenance.
 User -> Codex CLI -> MemoryForge MCP -> SQLite memory.db
                          |
                          +-> bounded CoreContextBundle
-                         +-> optional RLM/LCM worker runs
+                         +-> RLM/LTM retrieval
+                         +-> optional LCM compaction
 ```
 
 ## What It Is For
@@ -30,8 +31,10 @@ These sources are ingested through RLM, stored as durable LTM evidence, and
 recalled as bounded context when Codex needs them.
 
 MemoryForge intentionally avoids a large AST/code graph schema in the core
-release. Source files can still be stored as RLM/LTM evidence, but dedicated
-code indexing is future work rather than part of the current SQLite schema.
+release. The default auto-load path targets Markdown project knowledge
+(`README`, design notes, ADRs, plans, reports, specs). Code files can still be
+ingested manually, but dedicated code indexing is future work rather than part
+of the current SQLite schema.
 
 ## Memory Layers
 
@@ -51,7 +54,7 @@ preserve and rehydrate the evidence needed after compaction.
 From PyPI in a project that uses `uv`:
 
 ```bash
-uv add memfg
+uv add memfg==6.0.7
 ```
 
 FastEmbed is installed by default with `memfg`, so semantic/vector recall is available without an extra package selector.
@@ -64,7 +67,13 @@ uv sync --extra dev --extra benchmark
 
 ## Initialize A Codex Project
 
-Run this at the project root:
+First register the MemoryForge MCP server with Codex CLI. This uses Codex's own MCP manager instead of MemoryForge writing `.codex/config.toml`:
+
+```bash
+codex mcp add memoryforge -- uv run memoryforge-mcp
+```
+
+Then run MemoryForge init at the project root:
 
 ```bash
 uv run memoryforge init . --agent-id default --force
@@ -75,46 +84,31 @@ This creates:
 ```text
 .memoryforge/memory.db
 .memoryforge/config.json
-.codex/config.toml
-.codex/AGENTS.md
+AGENTS.md
 ```
 
-The Codex config registers the MemoryForge MCP server:
+During init, MemoryForge calls Codex CLI's `/init` flow to create/update the root `AGENTS.md`, then appends the guarded MemoryForge instruction block:
 
-```toml
-[mcp_servers.memoryforge]
-command = "uv"
-args = ["run", "memoryforge-mcp"]
-
-[mcp_servers.memoryforge.env]
-MEMORYFORGE_DB = "/absolute/path/.memoryforge/memory.db"
+```text
+<!-- MemoryForge instructions start -->
+...
+<!-- MemoryForge instructions end -->
 ```
 
-During init, MemoryForge scans project Markdown files, loads them as RLM buffers/chunks,
-and indexes them into LTM/vector recall. The default integration path is MCP/tool-first:
-Codex uses the project `.codex/AGENTS.md` instructions plus MemoryForge MCP tools to
-bootstrap project memory, refresh Markdown autoload, and retrieve bounded context.
+MemoryForge no longer creates project-local `.codex/` files and does not install Codex hooks. The default workflow is MCP/tool-first:
 
-Legacy Codex hooks are optional only. Install them explicitly with `uv run memoryforge init . --codex-hooks` if you are testing MemoryForge's hook endpoint itself.
+- `recall_memory`: fast factual recall from durable RLM/LTM indexes
+- `build_context_bundle`: grounded LCM/LTM context assembly for the active model
+- `autoload_markdown`: explicit refresh for changed Markdown files
+- `ensure_project_memory`: lightweight project-state check; it does not auto-index unless explicitly requested
+- `rlm_load`, `rlm_search`, `rlm_chunk_get`, `rlm_run`: large-context RLM workflows, with `rlm_run` reserved for explicit sub-agent analysis
 
-## Optional Legacy Hooks
-
-If you opt into `--codex-hooks`, MemoryForge uses a two-phase hook flow for user prompts:
-
-- `UserPromptSubmit` writes the latest prompt for the session to
-  `.memoryforge/pending/`.
-- `Stop` commits that pending prompt into SQLite, then RLM/LTM/LCM processing
-  can run.
-- `SessionStart` removes stale pending prompts after the local TTL.
-
-This keeps interrupted turns out of durable memory when the Codex turn is
-cancelled before `Stop` runs. MemoryForge does not infer cancellation from
-free-form hook payload fields such as status or reason strings; that is too
-fragile across Codex versions and locales. Explicit retract integrations should
-call the internal `discard-pending` hook event for the matching session before a
-later `Stop` can commit it.
-
+During init, MemoryForge scans project Markdown files, loads them as RLM buffers/chunks, and indexes them into LTM/vector recall. `AGENTS.md` itself is skipped during autoload so instructions do not pollute project memory.
 ## Basic Usage
+
+Default project usage is through Codex + MCP after `memoryforge init`. The CLI
+commands below are the direct/manual surface when you want to run MemoryForge
+outside the normal Codex tool loop.
 
 Ingest a long Markdown file or project document:
 
@@ -180,6 +174,10 @@ The project intentionally keeps one vector cache table, `vec_index`, and avoids
 SQLite extension backends such as `sqlite-vec` in the core release. This keeps
 the package easier to install, test, and publish.
 
+Retrieval is hybrid by design: vector recall and lexical recall can both
+contribute candidates, and MemoryForge fuses bounded evidence for the runtime
+context instead of relying on a vector-only path.
+
 ## CLI Surface
 
 Public commands:
@@ -191,7 +189,7 @@ Public commands:
 - RLM/source loading: `ingest-file`, `rlm-load`, `rlm-search`, `rlm-chunk-get`, `dispatch`, `context-get`, `rlm-record`, `aggregate`, `rlm-run`
 - Diagnostics: `chunk`, `benchmark`
 
-`memoryforge hook` remains available as an internal legacy endpoint when `--codex-hooks` is installed.
+`memoryforge hook` remains available as an internal endpoint for direct testing.
 RLM/LCM sub-agents are internal MemoryForge workers. For real worker runs,
 MemoryForge uses Codex CLI through `codex exec` when configured. Development-time
 Codex host subagents are separate review/triage helpers and are not the

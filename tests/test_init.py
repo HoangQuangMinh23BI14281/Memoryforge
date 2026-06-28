@@ -1,8 +1,5 @@
 import json
-import os
 import sqlite3
-
-import pytest
 
 from memoryforge import MemoryForge
 from memoryforge.init import handle_hook_event, init_project
@@ -35,12 +32,8 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
     assert result["indexed"]["chunks"] >= 1
     assert result["indexed"]["long_term_items"] >= 1
     assert result["hooks_enabled"] is False
-    assert (project / ".codex" / "config.toml").exists()
+    assert not (project / ".codex").exists()
     assert not (project / ".memoryforge" / "hooks").exists()
-    config_text = (project / ".codex" / "config.toml").read_text(encoding="utf-8")
-    assert "# --- MemoryForge MCP server ---" in config_text
-    assert "[mcp_servers.memoryforge]" in config_text
-    assert 'args = ["run", "memoryforge-mcp"]' in config_text
     assert (project / ".memoryforge" / "memory.db").exists()
     memoryforge_config = json.loads(
         (project / ".memoryforge" / "config.json").read_text(encoding="utf-8")
@@ -49,85 +42,44 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
     assert memoryforge_config["hooks_enabled"] is False
     assert memoryforge_config["subagent"]["runner"] == "codex"
     assert memoryforge_config["subagent"]["model"] == "gpt-5.4"
-    assert not (project / ".codex" / "hooks.json").exists()
+    assert ".codex" not in "\n".join(result["written"])
+    assert str(project / "AGENTS.md") in result["written"]
+    assert result["codex_init"]["ok"] is True
 
 
-def test_init_removes_memoryforge_hooks_but_keeps_user_hooks(tmp_path, monkeypatch):
+def test_init_does_not_touch_existing_codex_dir(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
     home = tmp_path / "home"
     home.mkdir()
     _isolate_home(monkeypatch, home)
-    (project / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
     codex_dir = project / ".codex"
     codex_dir.mkdir()
-    (codex_dir / "hooks.json").write_text(
-        json.dumps(
-            {
-                "hooks": {
-                    "Stop": [{"hooks": [{"type": "command", "command": "echo keep"}]}],
-                    "SessionEnd": [
-                        {
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": ".memoryforge/hooks/memoryforge-hook.cmd session-end"
-                                    if os.name == "nt"
-                                    else ".memoryforge/hooks/memoryforge-hook.sh session-end",
-                                }
-                            ]
-                        }
-                    ],
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    marker = codex_dir / "config.toml"
+    marker.write_text("user-owned = true\n", encoding="utf-8")
 
     init_project(str(project), agent_id="agent", force=True)
 
-    hooks = json.loads((codex_dir / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-    assert hooks["Stop"][0]["hooks"][0]["command"] == "echo keep"
-    assert "SessionEnd" not in hooks
+    assert marker.read_text(encoding="utf-8") == "user-owned = true\n"
+    assert (project / "AGENTS.md").exists()
 
 
-def test_init_opt_in_codex_hooks(tmp_path, monkeypatch):
+def test_init_writes_root_agents_instructions(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
     home = tmp_path / "home"
     home.mkdir()
     _isolate_home(monkeypatch, home)
-    (project / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
     monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
 
-    result = init_project(str(project), agent_id="agent", install_hooks=True, force=True)
+    result = init_project(str(project), agent_id="agent", force=True)
+    agents_text = (project / "AGENTS.md").read_text(encoding="utf-8")
 
-    assert result["hooks_enabled"] is True
-    assert (project / ".memoryforge" / "hooks").exists()
-    hooks = json.loads((project / ".codex" / "hooks.json").read_text(encoding="utf-8"))
-    assert set(hooks["hooks"]) == {"SessionStart", "UserPromptSubmit", "PreCompact", "Stop"}
-
-
-def test_init_refuses_user_managed_memoryforge_mcp_without_force(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
-    codex_dir = project / ".codex"
-    codex_dir.mkdir()
-    (codex_dir / "config.toml").write_text(
-        "\n".join(
-            [
-                "[mcp_servers.memoryforge]",
-                'command = "custom-memoryforge"',
-                'args = ["serve"]',
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="Could not configure Codex MCP delivery"):
-        init_project(str(project), agent_id="agent")
+    assert "MemoryForge Project Memory" in agents_text
+    assert "recall_memory" in agents_text
+    assert "autoload_markdown" in agents_text
+    assert "rlm_run" in agents_text
+    assert str(project / "AGENTS.md") in result["written"]
 
 
 def test_hook_ingests_prompt_and_referenced_file(tmp_path, monkeypatch):
@@ -263,25 +215,6 @@ def test_session_start_hook_indexes_markdown_files(tmp_path, monkeypatch):
     assert hook_result["indexed"]["enabled"] is True
     assert hook_result["indexed"]["files"] == 1
     assert any(hit["source_type"] == "rlm_chunk" for hit in hits)
-
-
-def test_init_writes_codex_agents_instructions(tmp_path, monkeypatch):
-    project = tmp_path / "project"
-    project.mkdir()
-    home = tmp_path / "home"
-    home.mkdir()
-    _isolate_home(monkeypatch, home)
-    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
-
-    result = init_project(str(project), agent_id="agent", force=True)
-    agents_text = (project / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
-
-    assert "MemoryForge Project Memory" in agents_text
-    assert "ensure_project_memory" in agents_text
-    assert "autoload_markdown" in agents_text
-    assert "recall_memory" in agents_text
-    assert "rlm_run" in agents_text
-    assert str(project / ".codex" / "AGENTS.md") in result["written"]
 
 
 def test_autoload_files_skips_unchanged_markdown_on_session_start(tmp_path, monkeypatch):

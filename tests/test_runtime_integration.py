@@ -13,17 +13,17 @@ def _python_project(tmp_path):
     return project
 
 
-def test_runtime_context_requires_configured_codex_delivery(tmp_path):
+def test_runtime_context_requires_initialized_project(tmp_path):
     project = _python_project(tmp_path)
 
-    with pytest.raises(RuntimeIntegrationError, match="Could not identify active runtime"):
+    with pytest.raises(RuntimeIntegrationError, match="Could not identify active Codex MemoryForge instructions"):
         resolve_runtime_integration(project)
 
-    init_project(str(project), agent_id="agent", configure_codex=False, force=True)
+    init_project(str(project), agent_id="agent", force=True)
+    runtime = resolve_runtime_integration(project, runtime="codex")
 
-    with pytest.raises(RuntimeIntegrationError, match="missing MemoryForge MCP delivery"):
-        resolve_runtime_integration(project, runtime="codex")
-
+    assert runtime.mcp_configured is True
+    assert runtime.config_path == str(project / "AGENTS.md")
 
 def test_runtime_context_bundle_uses_core_runtime_boundary(tmp_path):
     project = _python_project(tmp_path)

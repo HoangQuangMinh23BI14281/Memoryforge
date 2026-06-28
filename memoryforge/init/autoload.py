@@ -11,6 +11,8 @@ from typing import Any
 from memoryforge.api import MemoryForge
 
 DEFAULT_MARKDOWN_GLOBS = ("*.md", "*.markdown")
+SKIP_FILE_NAMES = {"AGENTS.md"}
+
 SKIP_DIR_NAMES = {
     ".git",
     ".hg",
@@ -151,7 +153,7 @@ def _is_skipped(path: Path, root: Path) -> bool:
         relative = path.relative_to(root)
     except ValueError:
         return True
-    return any(part in SKIP_DIR_NAMES for part in relative.parts[:-1])
+    return relative.name in SKIP_FILE_NAMES or any(part in SKIP_DIR_NAMES for part in relative.parts[:-1])
 
 
 def _file_fingerprint(path: Path) -> dict[str, Any]:

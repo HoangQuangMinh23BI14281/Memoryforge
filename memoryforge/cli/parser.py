@@ -279,15 +279,9 @@ def build_parser() -> argparse.ArgumentParser:
     init_cmd.add_argument("path", nargs="?", default=".")
     init_cmd.add_argument("--agent-id", default="default")
     init_cmd.add_argument("--db")
-    init_cmd.add_argument("--no-codex", action="store_true")
     init_cmd.add_argument("--no-index", action="store_true", help="Skip automatic Markdown indexing during init")
-    init_cmd.add_argument("--codex-hooks", action="store_true", help="Install legacy Codex hooks in addition to MCP delivery")
     init_cmd.add_argument("--force", action="store_true")
 
-    install_codex = subcommands.add_parser(
-        "install-codex", help="Install MemoryForge MCP instructions into the global Codex config"
-    )
-    install_codex.add_argument("--force", action="store_true")
 
     hook = subcommands.add_parser("hook", help="Internal Codex hook ingestion endpoint")
     hook.add_argument("event")
@@ -297,5 +291,3 @@ def build_parser() -> argparse.ArgumentParser:
 
     subcommands.add_parser("mcp-server", help="Run the MCP server")
     return parser
-
-

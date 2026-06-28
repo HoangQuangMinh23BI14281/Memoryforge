@@ -20,7 +20,7 @@ def ensure_project_memory_tool(db_path: str, arguments: dict[str, Any]) -> dict[
         str(root),
         agent_id=str(arguments.get("agent_id") or "default"),
         configure_codex=False,
-        auto_index=bool(arguments.get("auto_index", True)),
+        auto_index=bool(arguments.get("auto_index", False)),
         install_hooks=False,
     )
 
@@ -374,4 +374,3 @@ def rlm_run_tool(db_path: str, arguments: dict[str, Any]) -> dict[str, Any]:
         )
 
     return _with_memory_forge(db_path, handler, arguments)
-

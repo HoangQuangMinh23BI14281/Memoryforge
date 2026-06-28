@@ -19,3 +19,4 @@ htmlcov/
 .memoryforge/
 benchmarks/results/
 .pypirc
+memoryforge/benchmark/*.json
