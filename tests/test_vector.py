@@ -1,3 +1,4 @@
+import importlib
 import sqlite3
 import sys
 import types
@@ -28,6 +29,26 @@ def _install_fake_fastembed(monkeypatch, dimensions=3):
     fake_fastembed = types.ModuleType("fastembed")
     fake_fastembed.TextEmbedding = FakeTextEmbedding
     monkeypatch.setitem(sys.modules, "fastembed", fake_fastembed)
+
+
+def test_vector_index_default_backend_is_lexical_only(tmp_path, monkeypatch):
+    monkeypatch.delenv("MEMORYFORGE_VECTOR_BACKEND", raising=False)
+    monkeypatch.delenv("MEMORYFORGE_VECTOR_MODEL", raising=False)
+    monkeypatch.delenv("MEMORYFORGE_REQUIRE_VECTOR_MODEL", raising=False)
+
+    real_import_module = importlib.import_module
+
+    def import_without_fastembed(name, *args, **kwargs):
+        if name == "fastembed":
+            raise AssertionError("default VectorIndex should not import fastembed")
+        return real_import_module(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib, "import_module", import_without_fastembed)
+
+    index = VectorIndex(str(tmp_path / "memory.db"))
+
+    assert index.embedding_backend == "disabled"
+    assert index.backend() == "disabled"
 
 
 def test_vector_index_explicit_disabled_backend_disables_vector_search(tmp_path, monkeypatch):

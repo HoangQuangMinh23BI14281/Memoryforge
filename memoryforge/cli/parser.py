@@ -277,17 +277,33 @@ def build_parser() -> argparse.ArgumentParser:
         "init", help="Initialize MemoryForge for this uv/Python project"
     )
     init_cmd.add_argument("path", nargs="?", default=".")
-    init_cmd.add_argument("--agent-id", default="default")
+    init_cmd.add_argument("--agent-id", default="codex")
     init_cmd.add_argument("--db")
-    init_cmd.add_argument("--no-index", action="store_true", help="Skip automatic Markdown indexing during init")
+    init_index = init_cmd.add_mutually_exclusive_group()
+    init_index.add_argument(
+        "--index",
+        action="store_true",
+        help="Index Markdown files during init. By default init stays lightweight.",
+    )
+    init_index.add_argument(
+        "--no-index",
+        action="store_true",
+        help="Deprecated compatibility flag; init already skips indexing by default.",
+    )
+    init_cmd.add_argument(
+        "--configure-codex",
+        action="store_true",
+        help="Run Codex CLI setup and register the MemoryForge MCP server.",
+    )
     init_cmd.add_argument("--force", action="store_true")
 
 
     hook = subcommands.add_parser("hook", help="Internal Codex hook ingestion endpoint")
     hook.add_argument("event")
     hook.add_argument("--db", required=True)
-    hook.add_argument("--agent-id", default="default")
+    hook.add_argument("--agent-id", default="codex")
     hook.add_argument("--project-root", default=".")
 
     subcommands.add_parser("mcp-server", help="Run the MCP server")
     return parser
+

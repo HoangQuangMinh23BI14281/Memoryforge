@@ -519,6 +519,6 @@ def test_locomo_context_only_result_is_bundle_with_provenance(tmp_path):
         assert {"bm25", "vector"} & set(retrieval["stream_counts"])
         assert summary["memoryforge_query_latency_ms"]["count"] == 1
         assert summary["answer_latency_ms"]["count"] == 0
-        assert summary["answer_latency_separated"] is True
+        assert summary["targets"]["answer_latency_separated"] is True
     finally:
         mf.close()

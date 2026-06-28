@@ -59,9 +59,17 @@ def real_runner_args() -> dict[str, object]:
         "timeout_s": float(os.environ.get("MEMORYFORGE_REAL_TIMEOUT", "180")),
     }
 
+
 @pytest.fixture(autouse=True)
 def _stub_codex_project_init(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_run_codex_init(root: Path, *, timeout_s: float = 180.0) -> dict[str, object]:
+    def fake_run_codex_init(root: Path, *, timeout_s: float = 12.0) -> dict[str, object]:
         return {"ok": True, "stubbed": True, "agents_path": str(root / "AGENTS.md")}
 
+    def fake_ensure_codex_mcp_registered(*, timeout_s: float = 10.0) -> dict[str, object]:
+        return {"ok": True, "stubbed": True, "name": "memoryforge"}
+
     monkeypatch.setattr("memoryforge.init.bootstrap.run_codex_init", fake_run_codex_init)
+    monkeypatch.setattr(
+        "memoryforge.init.bootstrap.ensure_codex_mcp_registered",
+        fake_ensure_codex_mcp_registered,
+    )

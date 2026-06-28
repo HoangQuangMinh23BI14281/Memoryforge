@@ -115,9 +115,10 @@ class _DisabledEmbedder:
 class VectorIndex:
     """SQLite-persistent vector index.
 
-    Uses FastEmbed by default so PyPI installs have semantic recall ready.
-    Set MEMORYFORGE_VECTOR_BACKEND=disabled only for explicit offline/test
-    fallback. Hashing is intentionally not used for semantic search.
+    Semantic search is opt-in so normal init/MCP recall stays responsive on
+    fresh PyPI installs and offline machines. Set
+    MEMORYFORGE_VECTOR_BACKEND=fastembed to enable local FastEmbed recall.
+    Hashing is intentionally not used for semantic search.
     """
 
     def __init__(
@@ -145,10 +146,14 @@ class VectorIndex:
         self, model_name: str | None, backend: str | None, dimensions: int
     ) -> tuple[_Embedder, str]:
         resolved_model = model_name or os.environ.get("MEMORYFORGE_VECTOR_MODEL")
-        resolved_backend = (
-            backend or os.environ.get("MEMORYFORGE_VECTOR_BACKEND") or "auto"
-        ).lower()
+        configured_backend = backend or os.environ.get("MEMORYFORGE_VECTOR_BACKEND")
         require_vector_model = os.environ.get("MEMORYFORGE_REQUIRE_VECTOR_MODEL") == "1"
+        if configured_backend:
+            resolved_backend = configured_backend.lower()
+        elif resolved_model or require_vector_model:
+            resolved_backend = "fastembed"
+        else:
+            resolved_backend = "disabled"
         if resolved_backend in {"disabled", "none", "off"}:
             return _DisabledEmbedder(dimensions=dimensions), "disabled"
         if resolved_backend in {"hash", "hashing"}:

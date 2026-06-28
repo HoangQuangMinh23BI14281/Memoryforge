@@ -1,8 +1,11 @@
 import json
 import sqlite3
 
+import pytest
+
 from memoryforge import MemoryForge
 from memoryforge.init import handle_hook_event, init_project
+from memoryforge.runtime import RuntimeIntegrationError, resolve_runtime_integration
 
 
 def _isolate_home(monkeypatch, home):
@@ -42,6 +45,8 @@ def test_init_writes_agent_configs(tmp_path, monkeypatch):
     assert memoryforge_config["hooks_enabled"] is False
     assert memoryforge_config["subagent"]["runner"] == "codex"
     assert memoryforge_config["subagent"]["model"] == "gpt-5.4"
+    assert memoryforge_config["codex_mcp"]["ok"] is False
+    assert memoryforge_config["codex_mcp"]["skipped"] == "codex MCP registration not requested"
     assert ".codex" not in "\n".join(result["written"])
     assert str(project / "AGENTS.md") in result["written"]
     assert result["codex_init"]["ok"] is True
@@ -260,3 +265,60 @@ def test_init_accepts_non_python_project(tmp_path, monkeypatch):
 
     assert (project / ".memoryforge" / "memory.db").exists()
     assert result["project_root"] == str(project.resolve())
+
+
+def test_runtime_context_requires_registered_mcp(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeIntegrationError, match="Could not identify active Codex MemoryForge instructions"):
+        resolve_runtime_integration(project)
+
+    initialized = init_project(str(project), agent_id="agent", configure_codex=True, force=True)
+    runtime = resolve_runtime_integration(project, runtime="codex")
+
+    assert initialized["codex_mcp"]["ok"] is True
+    assert runtime.mcp_configured is True
+    assert runtime.config_path == str(project / "AGENTS.md")
+
+def test_init_defaults_to_codex_agent(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _isolate_home(monkeypatch, home)
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+
+    result = init_project(str(project), force=True)
+    config = json.loads((project / ".memoryforge" / "config.json").read_text(encoding="utf-8"))
+
+    assert result["db_path"] == config["db_path"]
+    assert config["agent_id"] == "codex"
+
+
+def test_init_reindexes_unchanged_markdown_when_agent_changes(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _isolate_home(monkeypatch, home)
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+    (project / "README.md").write_text("collector port is 4318", encoding="utf-8")
+
+    first = init_project(str(project), agent_id="default", force=True)
+    second = init_project(str(project), agent_id="codex", force=True)
+
+    conn = sqlite3.connect(first["db_path"])
+    try:
+        rows = conn.execute(
+            "SELECT agent_id, COUNT(*) FROM long_term_items GROUP BY agent_id ORDER BY agent_id"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    counts = {agent_id: count for agent_id, count in rows}
+    assert first["indexed"]["files"] == 1
+    assert second["indexed"]["files"] == 1
+    assert counts["default"] >= 1
+    assert counts["codex"] >= 1

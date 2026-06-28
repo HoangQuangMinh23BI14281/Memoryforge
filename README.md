@@ -54,16 +54,156 @@ preserve and rehydrate the evidence needed after compaction.
 From PyPI in a project that uses `uv`:
 
 ```bash
-uv add memfg==6.0.7
+uv add memfg==6.1.1
 ```
 
-FastEmbed is installed by default with `memfg`, so semantic/vector recall is available without an extra package selector.
+MemoryForge defaults to lexical BM25/FTS recall so first run stays responsive on
+fresh PyPI installs and offline machines. Semantic/vector recall is available
+when explicitly enabled with `MEMORYFORGE_VECTOR_BACKEND=fastembed`.
 
 For local development from this repository:
 
 ```bash
 uv sync --extra dev --extra benchmark
 ```
+
+## PyPI 6.1.1 Post-Publish Smoke Test
+
+After publishing:
+
+```bash
+uv run twine upload dist/memfg-6.1.1*
+```
+
+use a clean project to verify the package from PyPI. The flow below is written
+for Windows PowerShell, but the same commands work in any shell after adapting
+path syntax.
+
+1. Create a fresh uv project outside this repository:
+
+```powershell
+New-Item -ItemType Directory -Force C:\tmp\memoryforge-pypi-smoke | Out-Null
+Set-Location C:\tmp\memoryforge-pypi-smoke
+uv init --bare --name memoryforge-pypi-smoke .
+```
+
+2. Install the freshly published PyPI package:
+
+```powershell
+uv add memfg==6.1.1
+uv run memoryforge --help
+```
+
+`uv run memoryforge --help` must print CLI usage and exit. Do not use
+`uv run memoryforge-mcp` as a normal smoke test; that command starts the MCP
+stdio server and waits for a client, so an idle terminal there is expected.
+
+3. Register the MCP server with Codex CLI:
+
+```powershell
+codex mcp remove memoryforge
+codex mcp add memoryforge -- uv run memoryforge-mcp
+codex mcp get memoryforge --json
+```
+
+If `codex mcp remove memoryforge` says the server does not exist, continue with
+the `codex mcp add` command. Restart Codex after changing MCP registration.
+
+4. Initialize MemoryForge in the project:
+
+```powershell
+uv run memoryforge init . --agent-id codex --force
+```
+
+Expected behavior for `6.1.1`:
+
+- The command exits by itself.
+- `.memoryforge\memory.db` is created.
+- `.memoryforge\config.json` is created.
+- `AGENTS.md` is created or updated.
+- The JSON output shows `"indexed": {"enabled": false, ...}`.
+- The JSON output shows `"codex /init not requested"` unless you passed
+  `--configure-codex`.
+
+`init` is intentionally lightweight. It does not index Markdown by default, and
+it does not call Codex CLI subprocesses by default.
+
+5. Add a small Markdown memory file:
+
+```powershell
+New-Item -ItemType Directory -Force docs | Out-Null
+@'
+# Facilities telemetry
+
+Facilities use telemetry ingress endpoint https://telemetry.facilities.example.com/v2/ingest.
+
+The old endpoint https://telemetry.old.example.com/ingest was rejected because it bypassed tenant isolation and failed TLS pinning.
+'@ | Set-Content -Encoding UTF8 docs\telemetry.md
+```
+
+6. Index the Markdown file. For a direct CLI smoke test:
+
+```powershell
+uv run memoryforge --db .memoryforge\memory.db ingest-file docs\telemetry.md --agent-id codex
+```
+
+For a project-wide Markdown refresh instead, use:
+
+```powershell
+uv run memoryforge init . --agent-id codex --force --index
+```
+
+or ask Codex to call the MCP `autoload_markdown` tool after the MCP server is
+registered.
+
+7. Verify recall without Codex:
+
+```powershell
+uv run memoryforge --db .memoryforge\memory.db recall-memory `
+  --agent-id codex `
+  --query "telemetry ingress endpoint facilities old value rejected" `
+  --include-content
+```
+
+The output should include `https://telemetry.facilities.example.com/v2/ingest`
+and the rejection reason about tenant isolation and TLS pinning.
+
+8. Verify recall through Codex MCP. Start Codex from the same project directory:
+
+```powershell
+codex
+```
+
+Ask:
+
+```text
+What is the telemetry ingress endpoint used by facilities, and why was the old value rejected?
+```
+
+Expected Codex behavior:
+
+- It should call `memoryforge.recall_memory`.
+- The tool call should return quickly for this small project.
+- The answer should cite the new endpoint and explain why the old value was
+  rejected.
+
+If Codex does not call MemoryForge, ask explicitly:
+
+```text
+Use MemoryForge MCP recall_memory first. What is the telemetry ingress endpoint used by facilities, and why was the old value rejected?
+```
+
+9. Optional semantic vector recall. Leave this off for the first smoke test. To
+enable FastEmbed later, set the environment before indexing and before starting
+Codex:
+
+```powershell
+$env:MEMORYFORGE_VECTOR_BACKEND='fastembed'
+$env:MEMORYFORGE_VECTOR_MODEL='BAAI/bge-small-en-v1.5'
+```
+
+Without those variables, `6.1.1` uses lexical BM25/FTS recall by default so
+first run stays responsive on Windows and offline machines.
 
 ## Initialize A Codex Project
 
@@ -76,7 +216,7 @@ codex mcp add memoryforge -- uv run memoryforge-mcp
 Then run MemoryForge init at the project root:
 
 ```bash
-uv run memoryforge init . --agent-id default --force
+uv run memoryforge init . --agent-id codex --force
 ```
 
 This creates:
@@ -87,7 +227,8 @@ This creates:
 AGENTS.md
 ```
 
-During init, MemoryForge calls Codex CLI's `/init` flow to create/update the root `AGENTS.md`, then appends the guarded MemoryForge instruction block:
+During init, MemoryForge creates or updates the root `AGENTS.md` with a guarded
+MemoryForge instruction block:
 
 ```text
 <!-- MemoryForge instructions start -->
@@ -95,7 +236,7 @@ During init, MemoryForge calls Codex CLI's `/init` flow to create/update the roo
 <!-- MemoryForge instructions end -->
 ```
 
-MemoryForge no longer creates project-local `.codex/` files and does not install Codex hooks. The default workflow is MCP/tool-first:
+MemoryForge no longer creates project-local `.codex/` files and does not install Codex hooks. It also does not call Codex CLI subprocesses unless you pass `--configure-codex`. The default workflow is MCP/tool-first:
 
 - `recall_memory`: fast factual recall from durable RLM/LTM indexes
 - `build_context_bundle`: grounded LCM/LTM context assembly for the active model
@@ -103,7 +244,10 @@ MemoryForge no longer creates project-local `.codex/` files and does not install
 - `ensure_project_memory`: lightweight project-state check; it does not auto-index unless explicitly requested
 - `rlm_load`, `rlm_search`, `rlm_chunk_get`, `rlm_run`: large-context RLM workflows, with `rlm_run` reserved for explicit sub-agent analysis
 
-During init, MemoryForge scans project Markdown files, loads them as RLM buffers/chunks, and indexes them into LTM/vector recall. `AGENTS.md` itself is skipped during autoload so instructions do not pollute project memory.
+Init is intentionally lightweight by default. To index project Markdown during
+init, add `--index`, or run `autoload_markdown` from MCP after startup.
+`AGENTS.md` itself is skipped during autoload so instructions do not pollute
+project memory.
 ## Basic Usage
 
 Default project usage is through Codex + MCP after `memoryforge init`. The CLI
@@ -114,14 +258,14 @@ Ingest a long Markdown file or project document:
 
 ```bash
 uv run memoryforge --db .memoryforge/memory.db ingest-file docs/notes.md \
-  --agent-id default
+  --agent-id codex
 ```
 
 Load a large source through RLM:
 
 ```bash
 uv run memoryforge --db .memoryforge/memory.db rlm-load docs/design.md \
-  --agent-id default \
+  --agent-id codex \
   --name design-notes
 ```
 
@@ -129,7 +273,7 @@ Recall durable evidence:
 
 ```bash
 uv run memoryforge --db .memoryforge/memory.db recall-memory \
-  --agent-id default \
+  --agent-id codex \
   --query "why did we choose sqlite"
 ```
 
@@ -137,7 +281,7 @@ Build a runtime context bundle for the active Codex project:
 
 ```bash
 uv run memoryforge --db .memoryforge/memory.db runtime-context \
-  --agent-id default \
+  --agent-id codex \
   --session-id session-1 \
   --query "what context should Codex use now" \
   --project-root .
@@ -147,7 +291,7 @@ Run LCM compaction over MemoryForge's stored active context:
 
 ```bash
 uv run memoryforge --db .memoryforge/memory.db lcm-compact \
-  --agent-id default \
+  --agent-id codex \
   --session-id session-1 \
   --project-root . \
   --force
@@ -161,15 +305,15 @@ uv run memoryforge-mcp
 
 ## Vector Recall
 
-MemoryForge uses FastEmbed by default with `BAAI/bge-small-en-v1.5`, storing local
-embeddings in `vec_index`. No separate `memfg[embeddings]` install is required.
-You can select another local FastEmbed model with:
+MemoryForge uses lexical BM25/FTS recall by default. To enable semantic vector
+recall with FastEmbed and store local embeddings in `vec_index`, configure:
 
 ```bash
+export MEMORYFORGE_VECTOR_BACKEND=fastembed
 export MEMORYFORGE_VECTOR_MODEL=BAAI/bge-small-en-v1.5
 ```
 
-For explicit offline/test fallback only, set `MEMORYFORGE_VECTOR_BACKEND=disabled`.
+For explicit lexical-only fallback, set `MEMORYFORGE_VECTOR_BACKEND=disabled`.
 The project intentionally keeps one vector cache table, `vec_index`, and avoids
 SQLite extension backends such as `sqlite-vec` in the core release. This keeps
 the package easier to install, test, and publish.

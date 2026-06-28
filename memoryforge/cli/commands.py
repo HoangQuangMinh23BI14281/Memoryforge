@@ -23,13 +23,16 @@ def run_command(args: argparse.Namespace) -> int:
         run_server()
         return 0
     if args.command == "init":
+        auto_index = bool(getattr(args, "index", False)) and not bool(
+            getattr(args, "no_index", False)
+        )
         _print_json(
             init_project(
                 project_root=args.path,
                 db_path=args.db,
                 agent_id=args.agent_id,
-                configure_codex=False,
-                auto_index=not args.no_index,
+                configure_codex=bool(getattr(args, "configure_codex", False)),
+                auto_index=auto_index,
                 install_hooks=False,
                 force=args.force,
             )

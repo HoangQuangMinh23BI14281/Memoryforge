@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from memoryforge.lcm.conversation import ConversationStore
     from memoryforge.memory.longterm.store import LongTermMemoryIndex
     from memoryforge.rlm.chunking import ChunkingStrategy
+    from memoryforge.rlm.engine import RLMEngine
 
 
 class MemoryIOMixin:
@@ -25,6 +26,9 @@ class MemoryIOMixin:
 
         @property
         def chunking(self) -> ChunkingStrategy: ...
+
+        @property
+        def rlm(self) -> RLMEngine: ...
 
         def rlm_load(
             self,
@@ -44,6 +48,16 @@ class MemoryIOMixin:
             session_id: str,
             **kwargs: Any,
         ) -> CompactionRunResult: ...
+
+        def _index_rlm_load_result(
+            self,
+            *,
+            agent_id: str,
+            result: dict[str, Any],
+            chunk_size: int,
+            overlap: int,
+            rlm_deduped: bool,
+        ) -> None: ...
 
     def store_conversation(
         self,
@@ -149,12 +163,24 @@ class MemoryIOMixin:
         """Ingest a file through RLM chunks and LTM without appending it to LCM."""
 
         file_path = Path(path).expanduser().resolve()
-        result = self.rlm_load(
+        result = self.rlm.load(
             agent_id=agent_id,
             value=file_path,
             name=name or file_path.name,
+            source_path=str(file_path),
             chunk_size=chunk_size,
             overlap=overlap,
+        )
+        result["rlm_worker"] = {
+            "enabled": False,
+            "skipped": "ingest_file_indexing_only",
+        }
+        self._index_rlm_load_result(
+            agent_id=agent_id,
+            result=result,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            rlm_deduped=bool(result.get("deduped")),
         )
         result["ingest_path"] = str(file_path)
         return result

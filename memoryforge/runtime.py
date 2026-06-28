@@ -1,4 +1,4 @@
-"""Active core-runtime integration helpers.
+﻿"""Active core-runtime integration helpers.
 
 Runtime integration is intentionally separate from sub-agent execution. These
 helpers only verify that MemoryForge can deliver context to the user's active
@@ -75,16 +75,21 @@ def resolve_runtime_integration(
         )
 
     memoryforge_config = _load_json(mf_config_path)
-    mcp_configured = agents_configured
+    mcp_result = memoryforge_config.get("codex_mcp")
+    mcp_configured = agents_configured and isinstance(mcp_result, dict) and bool(mcp_result.get("ok"))
     hooks_configured = False
     memoryforge_configured = bool(memoryforge_config)
     if not memoryforge_configured:
         raise RuntimeIntegrationError(
             "MemoryForge project config is missing. Run `memoryforge init <project>` first."
         )
-    if not mcp_configured:
+    if not agents_configured:
         raise RuntimeIntegrationError(
             "Project AGENTS.md is missing MemoryForge instructions. Run `memoryforge init <project>` first."
+        )
+    if not mcp_configured:
+        raise RuntimeIntegrationError(
+            "MemoryForge MCP is not registered for Codex CLI. Run `memoryforge init <project>` again or `codex mcp add memoryforge -- uv run memoryforge-mcp`."
         )
     memoryforge_db_path = _memoryforge_config_db_path(memoryforge_config, root)
     if memoryforge_db_path is None:
@@ -116,13 +121,14 @@ def resolve_runtime_integration(
     )
 
 
-
 def _agents_memoryforge_configured(agents_path: Path) -> bool:
     try:
         text = agents_path.read_text(encoding="utf-8")
     except OSError:
         return False
     return "<!-- MemoryForge instructions start -->" in text and "recall_memory" in text
+
+
 def _codex_memoryforge_mcp_configured(config_path: Path) -> bool:
     return _codex_memoryforge_mcp_server(config_path) is not None
 

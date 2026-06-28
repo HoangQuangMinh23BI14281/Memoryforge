@@ -1,9 +1,11 @@
-"""Project autoload helpers for Markdown RLM/LTM indexing."""
+﻿"""Project autoload helpers for Markdown RLM/LTM indexing."""
 
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -84,15 +86,18 @@ def index_project_markdown(
     ensure_autoload_schema(db_path)
     if not files:
         return result
+    _progress(f"autoload: discovered {len(files)} markdown files under {root}")
     mf = MemoryForge(db_path)
     try:
-        for path in files:
+        for index, path in enumerate(files, start=1):
             relative_path = path.relative_to(root).as_posix()
             try:
                 fingerprint = _file_fingerprint(path)
-                if _autoload_file_unchanged(db_path, relative_path, fingerprint):
+                if _autoload_file_unchanged(db_path, relative_path, fingerprint, agent_id=agent_id):
                     result["unchanged_files"] += 1
+                    _progress(f"autoload: [{index}/{len(files)}] unchanged {relative_path}")
                     continue
+                _progress(f"autoload: [{index}/{len(files)}] indexing {relative_path}")
                 loaded = mf.rlm.load(
                     agent_id=agent_id,
                     value=path,
@@ -115,8 +120,17 @@ def index_project_markdown(
                     result["deduped_files"] += 1
             except Exception as exc:  # pragma: no cover - surfaced in returned diagnostics
                 result["errors"].append({"path": relative_path, "error": str(exc)})
+                _progress(f"autoload: [{index}/{len(files)}] error {relative_path}: {exc}")
         result["skipped_files"] = max(
             0, len(files) - int(result["files"]) - int(result["unchanged_files"])
+        )
+        _progress(
+            "autoload: done files={files} chunks={chunks} long_term_items={items} unchanged={unchanged}".format(
+                files=result["files"],
+                chunks=result["chunks"],
+                items=result["long_term_items"],
+                unchanged=result["unchanged_files"],
+            )
         )
         return result
     finally:
@@ -166,21 +180,39 @@ def _autoload_file_unchanged(
     db_path: str,
     relative_path: str,
     fingerprint: dict[str, Any],
+    *,
+    agent_id: str,
 ) -> bool:
     conn = sqlite3.connect(str(Path(db_path).expanduser()))
     try:
         conn.executescript(AUTOLOAD_SCHEMA_SQL)
         row = conn.execute(
-            "SELECT sha256, size, mtime FROM autoload_files WHERE path = ?",
+            "SELECT sha256, size, mtime, buffer_id FROM autoload_files WHERE path = ?",
             (relative_path,),
         ).fetchone()
         if row is None:
             return False
-        return (
+        fingerprint_matches = (
             str(row[0]) == str(fingerprint["sha256"])
             and int(row[1]) == int(fingerprint["size"])
             and float(row[2]) == float(fingerprint["mtime"])
         )
+        if not fingerprint_matches:
+            return False
+        buffer_id = str(row[3] or "")
+        if not buffer_id:
+            return False
+        buffer_row = conn.execute(
+            "SELECT agent_id FROM rlm_buffers WHERE buffer_id = ?",
+            (buffer_id,),
+        ).fetchone()
+        if buffer_row is None or str(buffer_row[0]) != agent_id:
+            return False
+        item_row = conn.execute(
+            "SELECT 1 FROM long_term_items WHERE agent_id = ? AND source_type = 'rlm_chunk' AND source_id IN (SELECT chunk_id FROM rlm_chunks WHERE buffer_id = ?) LIMIT 1",
+            (agent_id, buffer_id),
+        ).fetchone()
+        return item_row is not None
     finally:
         conn.close()
 
@@ -219,3 +251,12 @@ def _record_autoload_file(
         conn.commit()
     finally:
         conn.close()
+
+
+def _progress(message: str) -> None:
+    if os.environ.get("MEMORYFORGE_PROGRESS") == "0":
+        return
+    if not sys.stderr:
+        return
+    if os.environ.get("MEMORYFORGE_PROGRESS") == "1" or sys.stderr.isatty():
+        print(f"[memoryforge] {message}", file=sys.stderr, flush=True)

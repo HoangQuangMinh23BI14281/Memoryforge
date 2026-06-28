@@ -61,7 +61,7 @@ class ChunkingStrategy:
             ]
         content_type = self.detect_content_type(value)
         path = Path(value)
-        content = path.read_text(encoding="utf-8") if path.exists() else str(value)
+        content = path.read_text(encoding="utf-8-sig") if path.exists() else str(value)
         return [Chunk(content=content, content_type=content_type, metadata={"source": str(value)})]
 
 
@@ -71,15 +71,15 @@ class RLMContentChunker:
     def read_source(self, value: str | Path, source_path: str | None) -> tuple[str, str | None]:
         if source_path:
             path = Path(source_path).expanduser().resolve()
-            return path.read_text(encoding="utf-8", errors="replace"), str(path)
+            return path.read_text(encoding="utf-8-sig", errors="replace"), str(path)
         if isinstance(value, Path):
             path = value.expanduser().resolve()
-            return path.read_text(encoding="utf-8", errors="replace"), str(path)
+            return path.read_text(encoding="utf-8-sig", errors="replace"), str(path)
         try:
             candidate = Path(value).expanduser()
             if candidate.exists() and candidate.is_file():
                 path = candidate.resolve()
-                return path.read_text(encoding="utf-8", errors="replace"), str(path)
+                return path.read_text(encoding="utf-8-sig", errors="replace"), str(path)
         except (OSError, ValueError):
             pass
         return str(value), None

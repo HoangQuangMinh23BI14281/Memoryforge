@@ -137,3 +137,31 @@ def check():
     )
     assert auto_run["runner"] == "mock"
     assert auto_run["aggregate"]["summary_node_id"]
+
+def test_recall_memory_tool_truncates_large_content_for_mcp(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORYFORGE_SUBAGENT_RUNNER", "mock")
+    db_path = str(tmp_path / "memory.db")
+    project = tmp_path / "project"
+    project.mkdir()
+    long_text = ("collector endpoint 4318 replaced stale 4317. " * 500)
+    (project / "architecture.md").write_text(long_text, encoding="utf-8")
+
+    ensured = ensure_project_memory_tool(
+        db_path,
+        {"agent_id": "codex", "project_root": str(project), "auto_index": True},
+    )
+    recalled = recall_memory_tool(
+        ensured["db_path"],
+        {
+            "agent_id": "codex",
+            "query": "collector endpoint stale 4317 replaced 4318",
+            "include_content": True,
+            "top_k": 3,
+        },
+    )
+
+    assert recalled["results"]
+    first = recalled["results"][0]
+    assert first["content_truncated"] in {True, False}
+    assert first["content_chars"] >= len(first["content"])
+    assert len(first["content"]) <= 1604

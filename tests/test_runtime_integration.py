@@ -19,7 +19,7 @@ def test_runtime_context_requires_initialized_project(tmp_path):
     with pytest.raises(RuntimeIntegrationError, match="Could not identify active Codex MemoryForge instructions"):
         resolve_runtime_integration(project)
 
-    init_project(str(project), agent_id="agent", force=True)
+    init_project(str(project), agent_id="agent", configure_codex=True, force=True)
     runtime = resolve_runtime_integration(project, runtime="codex")
 
     assert runtime.mcp_configured is True
@@ -27,7 +27,7 @@ def test_runtime_context_requires_initialized_project(tmp_path):
 
 def test_runtime_context_bundle_uses_core_runtime_boundary(tmp_path):
     project = _python_project(tmp_path)
-    initialized = init_project(str(project), agent_id="agent", force=True)
+    initialized = init_project(str(project), agent_id="agent", configure_codex=True, force=True)
     mf = MemoryForge(initialized["db_path"])
     try:
         mf.store_conversation(
@@ -56,7 +56,7 @@ def test_runtime_context_bundle_uses_core_runtime_boundary(tmp_path):
 
 def test_runtime_context_fails_when_validated_delivery_points_at_different_db(tmp_path):
     project = _python_project(tmp_path)
-    initialized = init_project(str(project), agent_id="agent", force=True)
+    initialized = init_project(str(project), agent_id="agent", configure_codex=True, force=True)
     mf = MemoryForge(str(tmp_path / "other-memory.db"))
     try:
         with pytest.raises(RuntimeIntegrationError, match="active MemoryForge database"):
@@ -79,7 +79,7 @@ def test_runtime_context_fails_when_validated_delivery_points_at_different_db(tm
 
 def test_runtime_context_cli_outputs_validated_bundle(tmp_path, capsys):
     project = _python_project(tmp_path)
-    initialized = init_project(str(project), agent_id="agent", force=True)
+    initialized = init_project(str(project), agent_id="agent", configure_codex=True, force=True)
     mf = MemoryForge(initialized["db_path"])
     try:
         mf.store_conversation(

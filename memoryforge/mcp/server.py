@@ -214,7 +214,7 @@ def _resolve_mcp_db_path() -> str:
 
         ensure_project_initialized(
             str(root),
-            agent_id=os.environ.get("MEMORYFORGE_AGENT_ID", "default"),
+            agent_id=os.environ.get("MEMORYFORGE_AGENT_ID", "codex"),
             configure_codex=False,
             auto_index=False,
         )
@@ -232,5 +232,6 @@ def run_server() -> None:
             await app.run(read_stream, write_stream, app.create_initialization_options())
 
     asyncio.run(run_stdio())
+
 
 

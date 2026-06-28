@@ -1,4 +1,4 @@
-"""Tool handlers shared by MCP and tests."""
+﻿"""Tool handlers shared by MCP and tests."""
 
 from __future__ import annotations
 
@@ -12,13 +12,15 @@ from memoryforge.init.autoload import index_project_markdown
 from memoryforge.lcm import ContextBudget
 
 T = TypeVar("T")
+DEFAULT_AGENT_ID = "codex"
+_MCP_RECALL_SNIPPET_CHARS = 1600
 
 
 def ensure_project_memory_tool(db_path: str, arguments: dict[str, Any]) -> dict[str, Any]:
     root = Path(str(arguments.get("project_root") or ".")).expanduser().resolve()
     return ensure_project_initialized(
         str(root),
-        agent_id=str(arguments.get("agent_id") or "default"),
+        agent_id=str(arguments.get("agent_id") or DEFAULT_AGENT_ID),
         configure_codex=False,
         auto_index=bool(arguments.get("auto_index", False)),
         install_hooks=False,
@@ -29,14 +31,13 @@ def autoload_markdown_tool(db_path: str, arguments: dict[str, Any]) -> dict[str,
     root = Path(str(arguments.get("project_root") or ".")).expanduser().resolve()
     return index_project_markdown(
         db_path=db_path,
-        agent_id=str(arguments.get("agent_id") or "default"),
+        agent_id=str(arguments.get("agent_id") or DEFAULT_AGENT_ID),
         project_root=str(root),
         chunk_size=int(arguments.get("chunk_size", 12_000)),
         overlap=int(arguments.get("overlap", 1_000)),
         max_files=int(arguments.get("max_files", 200)),
         max_file_bytes=int(arguments.get("max_file_bytes", 1_000_000)),
     )
-
 
 
 def _safe_close(mf: MemoryForge) -> None:
@@ -89,15 +90,14 @@ def recall_conversation_tool(db_path: str, arguments: dict[str, Any]) -> dict[st
 
 def recall_memory_tool(db_path: str, arguments: dict[str, Any]) -> dict[str, Any]:
     def handler(mf: MemoryForge, args: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "results": mf.recall_long_term(
-                agent_id=args["agent_id"],
-                query=args["query"],
-                top_k=int(args.get("top_k", args.get("limit", 10))),
-                include_content=bool(args.get("include_content", False)),
-                session_id=args.get("session_id"),
-            )
-        }
+        results = mf.recall_long_term(
+            agent_id=args["agent_id"],
+            query=args["query"],
+            top_k=int(args.get("top_k", args.get("limit", 10))),
+            include_content=bool(args.get("include_content", False)),
+            session_id=args.get("session_id"),
+        )
+        return {"results": _compact_recall_results_for_mcp(results)}
 
     return _with_memory_forge(db_path, handler, arguments)
 
@@ -229,6 +229,28 @@ def _optional_int_arg(args: dict[str, Any], key: str) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _compact_recall_results_for_mcp(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compacted: list[dict[str, Any]] = []
+    for result in results:
+        item = dict(result)
+        content = item.get("content")
+        if isinstance(content, str):
+            text = content.lstrip("\ufeff")
+            if len(text) > _MCP_RECALL_SNIPPET_CHARS:
+                item["content"] = text[:_MCP_RECALL_SNIPPET_CHARS].rstrip() + " ..."
+                item["content_truncated"] = True
+                item["content_chars"] = len(text)
+            else:
+                item["content"] = text
+                item["content_truncated"] = False
+                item["content_chars"] = len(text)
+        preview = item.get("preview")
+        if isinstance(preview, str):
+            item["preview"] = preview.lstrip("\ufeff")
+        compacted.append(item)
+    return compacted
 
 
 def rlm_load_tool(db_path: str, arguments: dict[str, Any]) -> dict[str, Any]:

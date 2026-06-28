@@ -12,13 +12,19 @@ from typing import Any
 from memoryforge.agents.codex_sync import load_codex_defaults
 from memoryforge.db import init_memoryforge_schema
 from memoryforge.init.autoload import index_project_markdown
-from memoryforge.init.codex import install_codex_agents_md, run_codex_init
+from memoryforge.init.codex import (
+    ensure_codex_mcp_registered,
+    install_codex_agents_md,
+    run_codex_init,
+)
+
+DEFAULT_AGENT_ID = "codex"
 
 
 def init_project(
     project_root: str = ".",
     db_path: str | None = None,
-    agent_id: str = "default",
+    agent_id: str = DEFAULT_AGENT_ID,
     *,
     configure_codex: bool = False,
     auto_index: bool = True,
@@ -36,7 +42,6 @@ def init_project(
         resolved_db = (root / resolved_db).resolve()
     init_memoryforge_schema(str(resolved_db))
 
-
     written: list[str] = []
     hook_runner: Path | None = None
     if install_hooks:
@@ -44,9 +49,12 @@ def init_project(
         hook_runner = _write_hook_runner(root, hooks_dir, force=force)
         written.append(str(hook_runner))
 
-    codex_init = run_codex_init(root)
+    codex_init = (
+        run_codex_init(root) if configure_codex else _codex_init_skipped(root / "AGENTS.md")
+    )
     install_codex_agents_md(root / "AGENTS.md")
     written.append(str(root / "AGENTS.md"))
+    codex_mcp = ensure_codex_mcp_registered() if configure_codex else _codex_mcp_skipped()
 
     indexed = {"files": 0, "chunks": 0, "long_term_items": 0, "enabled": False}
     if auto_index:
@@ -55,6 +63,7 @@ def init_project(
             agent_id=agent_id,
             project_root=str(root),
         )
+
     codex_defaults = load_codex_defaults(root)
     subagent_config: dict[str, Any] = {
         "runner": "codex",
@@ -78,6 +87,7 @@ def init_project(
                 "hooks_enabled": bool(install_hooks),
                 "subagent": subagent_config,
                 "codex_init": codex_init,
+                "codex_mcp": codex_mcp,
             },
             indent=2,
         )
@@ -93,13 +103,14 @@ def init_project(
         "written": written,
         "hooks_enabled": bool(install_hooks),
         "codex_init": codex_init,
+        "codex_mcp": codex_mcp,
     }
 
 
 def ensure_project_initialized(
     project_root: str = ".",
     *,
-    agent_id: str = "default",
+    agent_id: str = DEFAULT_AGENT_ID,
     configure_codex: bool = False,
     auto_index: bool = True,
     install_hooks: bool = False,
@@ -130,6 +141,11 @@ def ensure_project_initialized(
             "written": [],
             "hooks_enabled": bool(config.get("hooks_enabled", False)),
             "codex_init": {"ok": True, "skipped": "already initialized"},
+            "codex_mcp": (
+                ensure_codex_mcp_registered()
+                if configure_codex
+                else config.get("codex_mcp") or _codex_mcp_skipped()
+            ),
         }
     return init_project(
         str(root),
@@ -140,6 +156,23 @@ def ensure_project_initialized(
         install_hooks=install_hooks,
         force=False,
     )
+
+
+def _codex_init_skipped(agents_path: Path) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "skipped": "codex /init not requested",
+        "agents_path": str(agents_path),
+    }
+
+
+def _codex_mcp_skipped() -> dict[str, Any]:
+    return {
+        "ok": False,
+        "skipped": "codex MCP registration not requested",
+        "name": "memoryforge",
+    }
+
 
 def _write_hook_runner(root: Path, hooks_dir: Path, *, force: bool) -> Path:
     if os.name == "nt":
