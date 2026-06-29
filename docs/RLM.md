@@ -13,8 +13,8 @@ into the active context.
 | Chunk references | `rlm_chunk:<id>` |
 | Chunk retrieval | `memoryforge rlm-chunk-get <id>` |
 | Hybrid retrieval | BM25 plus vector search with RRF fusion |
-| Worker findings | LCM messages and SummaryDAG leaves |
-| Aggregation | SummaryDAG parent nodes |
+| Worker findings | Host-subagent analyses recorded as LCM messages, SummaryDAG leaves, and derived LTM items |
+| Aggregation | SummaryDAG parent nodes plus `rlm_summary` LTM rows |
 
 ## Lossless Contract
 
@@ -22,7 +22,9 @@ into the active context.
 - Chunks store byte, char, and line ranges.
 - `rlm-chunk-get` can recover exact chunk content.
 - LTM indexes RLM chunks with BM25 and vector search.
-- Sub-agent outputs keep source chunk refs.
+- `memoryforge index --analyze` and MCP `index_analyze` return host-subagent batch prompts and record/aggregate commands.
+- Recorded host-subagent analyses become `rlm_analysis` and final aggregates become `rlm_summary`.
+- Sub-agent outputs keep source chunk refs, so shallow recall can rehydrate exact chunks later.
 
 ## Runtime Shape
 
@@ -35,11 +37,15 @@ The low-level tools support a root LLM that dispatches workers manually:
 - `rlm-record`
 - `aggregate`
 
-`rlm-run` can also run configured sub-agents directly and record their outputs
-into the local LCM store and summary DAG.
+`rlm-load` is ingestion-only: it loads/chunks/indexes lossless source chunks and
+does not spawn a worker. `memoryforge index --analyze` and MCP `index_analyze`
+follow the same principle: they prepare host-subagent work but do not call `codex exec` or any
+external model process. The active host agent runs subagents, then records each
+batch with `rlm-record` and finalizes with `aggregate`.
 
 ## Relation To LCM
 
 RLM processes large sources. LCM decides what enters the next active model
-context. RLM findings can become part of LCM, but full file bodies stay in
-RLM/LTM unless a caller explicitly rehydrates them.
+context. LTM recall can surface RLM-derived summaries first, while full file
+bodies and exact chunks stay recoverable through `rlm_chunk:<id>` refs unless a
+caller explicitly rehydrates them.

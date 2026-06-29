@@ -1,3 +1,5 @@
+import json
+
 from memoryforge import MemoryForge
 from memoryforge.cli.main import main
 from memoryforge.lcm import (
@@ -717,6 +719,83 @@ def test_lcm_maintain_cli_runs_compaction(tmp_path, capsys):
 
     assert exit_code == 0
     assert '"compacted": 1' in output
+
+
+def test_lcm_observability_cli_lists_sessions_messages_and_summaries(tmp_path, capsys):
+    db_path = str(tmp_path / "memory.db")
+    mf = MemoryForge(db_path)
+    try:
+        turns = [
+            {"role": "user", "content": f"message {index} " + ("large context " * 120)}
+            for index in range(8)
+        ]
+        mf.store_conversation("agent", turns, session_id="session")
+        mf.lcm_compact_if_needed(
+            "agent",
+            "session",
+            budget=ContextBudget(
+                model_context_limit=2_500, reserved_output_tokens=100, compaction_buffer=100
+            ),
+            runner="mock",
+            max_rounds=1,
+        )
+    finally:
+        mf.close()
+
+    sessions_exit = main(
+        [
+            "--db",
+            db_path,
+            "lcm-sessions",
+            "--agent-id",
+            "agent",
+            "--context-limit",
+            "2500",
+            "--reserved-output",
+            "100",
+            "--compaction-buffer",
+            "100",
+        ]
+    )
+    sessions_output = capsys.readouterr().out
+    messages_exit = main(
+        [
+            "--db",
+            db_path,
+            "lcm-messages",
+            "--session-id",
+            "session",
+            "--agent-id",
+            "agent",
+            "--include-content",
+        ]
+    )
+    messages_output = capsys.readouterr().out
+    summary_exit = main(
+        [
+            "--db",
+            db_path,
+            "lcm-summary",
+            "--session-id",
+            "session",
+        ]
+    )
+    summary_output = capsys.readouterr().out
+
+    sessions = json.loads(sessions_output)
+    messages = json.loads(messages_output)
+    summaries = json.loads(summary_output)
+
+    assert sessions_exit == 0
+    assert messages_exit == 0
+    assert summary_exit == 0
+    assert sessions["sessions"][0]["session_id"] == "session"
+    assert sessions["sessions"][0]["message_count"] == 8
+    assert sessions["sessions"][0]["has_summary"] is True
+    assert messages["count"] == 8
+    assert messages["messages"][0]["parts"][0]["content"].startswith("message 0")
+    assert summaries["count"] >= 1
+    assert summaries["summary_nodes"][0]["id"]
 
 
 def test_lcm_compaction_skips_context_expanding_summary(tmp_path):

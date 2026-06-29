@@ -8,14 +8,11 @@ from typing import TYPE_CHECKING, Any
 
 from memoryforge.memory.longterm.models import (
     LongTermRecallResult,
-    MemoryConfidence,
     MetadataField,
 )
 from memoryforge.memory.longterm.utils import tokenize_query
 
-_ANSWER_EVIDENCE_BONUS = 0.5
 _ANSWER_EVIDENCE_SNIPPET_CHARS = 1_100
-_SAME_SESSION_BONUS = 0.2
 
 if TYPE_CHECKING:
     from memoryforge.search.vector import VectorIndex
@@ -48,10 +45,19 @@ class LongTermRetrievalMixin:
         rows = self._fetch_items(selected_ids, include_content)
         results: list[LongTermRecallResult] = []
         fused_scores = dict(fused_ids)
+        selection_details = self._selection_details(
+            selected_ids=selected_ids,
+            streams=streams,
+            fused_scores=fused_scores,
+        )
         for item_id in selected_ids:
             row = rows.get(item_id)
             if row is None:
                 continue
+            score = fused_scores.get(item_id, 0.0)
+            final_streams = dict(stream_details.get(item_id, {}))
+            final_streams["fusion"] = {"score": score}
+            final_streams["selection"] = selection_details.get(item_id, {})
             results.append(
                 LongTermRecallResult(
                     item_id=item_id,
@@ -60,13 +66,13 @@ class LongTermRetrievalMixin:
                     content_id=row["content_id"],
                     raw_ref=f"{row['source_type']}:{row['source_id']}",
                     preview=row["preview"],
-                    score=fused_scores.get(item_id, 0.0),
-                    streams=stream_details.get(item_id, {}),
+                    score=score,
+                    streams=final_streams,
                     metadata=json.loads(row["metadata"] or "{}"),
                     content=row.get("content"),
                 )
             )
-        return self._rerank_results(results, query=query, session_id=session_id)[:limit]
+        return results[:limit]
 
     def get_source(self, agent_id: str, item_id: str) -> dict[str, Any] | None:
         rows = self._fetch_items([item_id], include_content=True)
@@ -163,15 +169,22 @@ class LongTermRetrievalMixin:
                 pass
         return self._like_search(agent_id, tokens, limit)
 
-    def _like_search(self, agent_id: str, tokens: list[str], limit: int) -> list[tuple[str, float]]:
+    def _like_search(
+        self,
+        agent_id: str,
+        tokens: list[str],
+        limit: int,
+    ) -> list[tuple[str, float]]:
+        clauses = ["scope = 'long_term'", "agent_id = ?"]
+        params: list[Any] = [agent_id]
         rows = self.conn.execute(
-            """
+            f"""
             SELECT source_id, content
             FROM search_fts
-            WHERE scope = 'long_term' AND agent_id = ?
+            WHERE {" AND ".join(clauses)}
             LIMIT 2000
             """,
-            (agent_id,),
+            params,
         ).fetchall()
         scored: list[tuple[str, float]] = []
         for item_id, content in rows:
@@ -300,71 +313,28 @@ class LongTermRetrievalMixin:
         return selected
 
     @staticmethod
-    def _rerank_results(
-        results: list[LongTermRecallResult],
+    def _selection_details(
         *,
-        query: str = "",
-        session_id: str | None = None,
-    ) -> list[LongTermRecallResult]:
-        del query
-
-        reranked: list[LongTermRecallResult] = []
-        for result in results:
-            metadata = result.metadata or {}
-            score = result.score
-            signals: dict[str, float | int] = {"fused_score": result.score}
-
-            if (
-                result.source_type == "correction"
-                or metadata.get(MetadataField.KIND) == "correction"
-            ):
-                score += 1.0
-                signals["correction_bonus"] = 1
-            if metadata.get(MetadataField.CONFIDENCE) == MemoryConfidence.HIGH:
-                score += 0.25
-                signals["high_confidence_bonus"] = 1
-            elif metadata.get(MetadataField.CONFIDENCE) == MemoryConfidence.LOW:
-                score -= 1.5
-                signals["low_confidence_penalty"] = 1
-            if metadata.get(MetadataField.SUPERSEDES) or metadata.get(MetadataField.CONTRADICTS):
-                score += 0.15
-                signals["contradiction_tracking_bonus"] = 1
-            if metadata.get(MetadataField.VALID_TO) or metadata.get(MetadataField.SUPERSEDED_BY):
-                score -= 1.5
-                signals["stale_or_superseded_penalty"] = 1
-            if session_id and metadata.get(MetadataField.SESSION_ID) == session_id:
-                score += _SAME_SESSION_BONUS
-                signals["same_session_bonus"] = 1
-            if metadata.get(MetadataField.ANSWER_EVIDENCE) is True:
-                score += _ANSWER_EVIDENCE_BONUS
-                signals["answer_evidence_bonus"] = 1
-
-            final_streams = dict(result.streams)
-            final_streams["fusion"] = {"score": result.score}
-            signals["final_score"] = round(score, 6)
-            signals["bonus"] = round(score - result.score, 6)
-            final_streams["selection"] = signals
-            final_streams["rerank"] = signals
-            reranked.append(
-                LongTermRecallResult(
-                    item_id=result.item_id,
-                    source_type=result.source_type,
-                    source_id=result.source_id,
-                    content_id=result.content_id,
-                    raw_ref=result.raw_ref,
-                    preview=result.preview,
-                    score=score,
-                    streams=final_streams,
-                    metadata=result.metadata,
-                    content=result.content,
-                )
-            )
-
-        def rerank_key(result: LongTermRecallResult) -> tuple[float, float]:
-            fused_score = float(result.streams.get("fusion", {}).get("score", result.score))
-            return result.score, fused_score
-
-        return sorted(reranked, key=rerank_key, reverse=True)
+        selected_ids: list[str],
+        streams: dict[str, list[tuple[str, float]]],
+        fused_scores: dict[str, float],
+    ) -> dict[str, dict[str, float | int]]:
+        stream_champions = {
+            stream_name: results[0][0]
+            for stream_name, results in streams.items()
+            if results
+        }
+        details: dict[str, dict[str, float | int]] = {}
+        for selected_rank, item_id in enumerate(selected_ids, start=1):
+            item_details: dict[str, float | int] = {
+                "selected_rank": selected_rank,
+                "fused_score": fused_scores.get(item_id, 0.0),
+            }
+            for stream_name, champion_id in stream_champions.items():
+                if item_id == champion_id:
+                    item_details[f"{stream_name}_champion"] = 1
+            details[item_id] = item_details
+        return details
 
 
 def _recall_text(result: LongTermRecallResult, content_policy: str, *, query: str = "") -> str:

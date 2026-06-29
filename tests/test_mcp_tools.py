@@ -5,16 +5,11 @@ import anyio
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from memoryforge import MemoryForge
 from memoryforge.mcp.tools import (
-    autoload_markdown_tool,
     build_context_bundle_tool,
-    ensure_project_memory_tool,
+    index_analyze_tool,
     recall_memory_tool,
-    rlm_chunk_get_tool,
-    rlm_load_tool,
-    rlm_run_tool,
-    rlm_search_tool,
-    store_conversation_tool,
 )
 
 
@@ -34,11 +29,12 @@ def test_mcp_server_stdio_handshake(tmp_path):
                 tools = await session.list_tools()
 
         assert initialized.serverInfo.name == "memoryforge"
-        assert any(tool.name == "ensure_project_memory" for tool in tools.tools)
-        assert any(tool.name == "autoload_markdown" for tool in tools.tools)
-        assert any(tool.name == "rlm_run" for tool in tools.tools)
         tool_names = {tool.name for tool in tools.tools}
-        assert "recall" not in tool_names
+        assert tool_names == {"recall_memory", "build_context_bundle", "index_analyze"}
+        assert "ensure_project_memory" not in tool_names
+        assert "autoload_markdown" not in tool_names
+        assert "rlm_run" not in tool_names
+        assert "record_turn" not in tool_names
         assert "record_contradiction" not in tool_names
         assert "rlm_dispatch" not in tool_names
         assert "build_runtime_context_bundle" not in tool_names
@@ -46,55 +42,25 @@ def test_mcp_server_stdio_handshake(tmp_path):
     anyio.run(smoke)
 
 
-def test_mcp_tools_smoke(tmp_path, monkeypatch):
+def test_public_mcp_tools_smoke(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMORYFORGE_SUBAGENT_RUNNER", "mock")
     db_path = str(tmp_path / "memory.db")
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "app.py").write_text(
-        """
-class App:
-    def get(self, path):
-        return path
+    mf = MemoryForge(db_path)
+    try:
+        mf.store_conversation(
+            "agent",
+            [{"role": "user", "content": "Health route uses check."}],
+            session_id="s1",
+        )
+    finally:
+        mf.close()
 
-app = App()
-
-@app.get("/health")
-def health():
-    result = check()
-    return result
-
-def check():
-    return True
-""",
-        encoding="utf-8",
-    )
-
-    ensured = ensure_project_memory_tool(
-        db_path,
-        {"agent_id": "agent", "project_root": str(project), "auto_index": True},
-    )
-    autoloaded = autoload_markdown_tool(
-        db_path,
-        {"agent_id": "agent", "project_root": str(project)},
-    )
-    stored = store_conversation_tool(
-        db_path,
-        {
-            "agent_id": "agent",
-            "session_id": "s1",
-            "turns": [{"role": "user", "content": "Health route uses check."}],
-        },
-    )
-    assert ensured["project_root"] == str(project.resolve())
-    assert ensured["hooks_enabled"] is False
-    assert autoloaded["enabled"] is True
-    assert stored["count"] == 1
     recalled = recall_memory_tool(
         db_path,
         {"agent_id": "agent", "query": "Health route", "include_content": True},
     )
     assert recalled["results"]
+
     bundle = build_context_bundle_tool(
         db_path,
         {
@@ -109,49 +75,19 @@ def check():
     assert bundle["messages"][0]["source"] == "active_recall"
     assert any(message["source"] == "long_term" for message in bundle["messages"])
 
-    loaded = rlm_load_tool(
-        db_path,
-        {
-            "agent_id": "agent",
-            "content": "Alice owns auth.\n\nBob owns billing.\n\nCarol owns search.",
-            "name": "oversized-prompt",
-            "chunk_size": 1000,
-        },
-    )
-    searched = rlm_search_tool(
-        db_path,
-        {"agent_id": "agent", "query": "Alice auth", "buffer_id": loaded["buffer_id"]},
-    )
-    chunk_id = searched["results"][0]["chunk_id"]
-    assert "Alice" in rlm_chunk_get_tool(db_path, {"chunk_id": chunk_id})["chunk"]["content"]
-    auto_run = rlm_run_tool(
-        db_path,
-        {
-            "agent_id": "agent",
-            "content": "Dana owns reliability.\n\nEli owns release notes." * 80,
-            "limit": 1,
-            "batch_size": 1,
-            "chunk_size": 1000,
-            "runner": "mock",
-        },
-    )
-    assert auto_run["runner"] == "mock"
-    assert auto_run["aggregate"]["summary_node_id"]
 
 def test_recall_memory_tool_truncates_large_content_for_mcp(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMORYFORGE_SUBAGENT_RUNNER", "mock")
     db_path = str(tmp_path / "memory.db")
-    project = tmp_path / "project"
-    project.mkdir()
-    long_text = ("collector endpoint 4318 replaced stale 4317. " * 500)
-    (project / "architecture.md").write_text(long_text, encoding="utf-8")
+    long_text = "collector endpoint 4318 replaced stale 4317. " * 500
+    mf = MemoryForge(db_path)
+    try:
+        mf.long_term.index_raw_item("codex", "note", "architecture", long_text)
+    finally:
+        mf.close()
 
-    ensured = ensure_project_memory_tool(
-        db_path,
-        {"agent_id": "codex", "project_root": str(project), "auto_index": True},
-    )
     recalled = recall_memory_tool(
-        ensured["db_path"],
+        db_path,
         {
             "agent_id": "codex",
             "query": "collector endpoint stale 4317 replaced 4318",
@@ -165,3 +101,38 @@ def test_recall_memory_tool_truncates_large_content_for_mcp(tmp_path, monkeypatc
     assert first["content_truncated"] in {True, False}
     assert first["content_chars"] >= len(first["content"])
     assert len(first["content"]) <= 1604
+
+
+def test_index_analyze_tool_returns_host_subagent_plan(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORYFORGE_VECTOR_BACKEND", "disabled")
+    monkeypatch.setenv("MEMORYFORGE_PROGRESS", "0")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "large.md").write_text(
+        "Telemetry endpoint 4318 replaced stale 4317.\n\n" * 40,
+        encoding="utf-8",
+    )
+
+    payload = index_analyze_tool(
+        str(project / ".memoryforge" / "memory.db"),
+        {
+            "agent_id": "codex",
+            "project_root": str(project),
+            "chunk_size": 120,
+            "overlap": 0,
+            "max_files": 1,
+            "analyze_min_bytes": 0,
+            "analyze_max_files": 1,
+            "batch_size": 1,
+        },
+    )
+
+    analyze = payload["analyze"]
+    plan = analyze["plans"][0]
+    batch = plan["batches"][0]
+
+    assert payload["external_model_calls"] is False
+    assert payload["raw"]["enabled"] is True
+    assert analyze["mode"] == "host_subagent_plan"
+    assert plan["expected_batch_count"] == plan["batch_count"]
+    assert "rlm_chunk:" in batch["host_subagent_prompt"]

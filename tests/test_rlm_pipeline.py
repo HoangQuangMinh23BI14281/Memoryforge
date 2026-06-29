@@ -25,6 +25,8 @@ def test_rlm_load_search_chunk_get_dispatch(tmp_path):
         loaded = mf.rlm_load("agent", source, name="notes", chunk_size=1_200, overlap=120, runner="mock")
         assert loaded["lossless"] is True
         assert loaded["chunk_count"] > 1
+        assert loaded["rlm_worker"]["enabled"] is False
+        assert loaded["rlm_worker"]["skipped"] == "rlm_load_indexing_only"
 
         results = mf.rlm_search("agent", "Alice SQLite", buffer_id=loaded["buffer_id"], limit=3)
         assert results
@@ -153,6 +155,56 @@ def test_rlm_record_and_aggregate_preserve_lcm_dag_refs(tmp_path):
         mf.close()
 
 
+def test_rlm_record_is_idempotent_and_aggregate_validates_expected_batches(tmp_path):
+    mf = MemoryForge(str(tmp_path / "memory.db"))
+    try:
+        loaded = mf.rlm_load(
+            "agent",
+            "Alice owns authentication.\n\nBob owns billing.\n\nCarol owns observability." * 80,
+            chunk_size=600,
+            overlap=0,
+            runner="mock",
+        )
+        plan = mf.rlm_dispatch("agent", buffer_id=loaded["buffer_id"], limit=2, batch_size=1)
+        first_batch = plan["batches"][0]
+        first_chunk = first_batch["chunk_ids"][0]
+
+        first = mf.rlm_record_result(
+            "agent",
+            plan["run_id"],
+            [first_chunk],
+            "Sub-agent finding: Alice owns authentication.",
+            batch_index=0,
+        )
+        second = mf.rlm_record_result(
+            "agent",
+            plan["run_id"],
+            [first_chunk],
+            "Sub-agent finding duplicate should not create a second leaf.",
+            batch_index=0,
+        )
+
+        assert second["idempotent"] is True
+        assert second["summary_node_id"] == first["summary_node_id"]
+        with pytest.raises(ValueError, match="missing batches"):
+            mf.rlm_aggregate("agent", plan["run_id"], expected_batch_count=2)
+
+        second_batch = plan["batches"][1]
+        second_chunk = second_batch["chunk_ids"][0]
+        mf.rlm_record_result(
+            "agent",
+            plan["run_id"],
+            [second_chunk],
+            "Sub-agent finding: Bob owns billing.",
+            batch_index=1,
+        )
+        aggregate = mf.rlm_aggregate("agent", plan["run_id"], expected_batch_count=2)
+
+        assert len(aggregate["child_node_ids"]) == 2
+    finally:
+        mf.close()
+
+
 def _table_counts(db_path: str) -> dict[str, int]:
     with sqlite3.connect(db_path) as conn:
         return {
@@ -181,6 +233,7 @@ def test_rlm_run_spawns_runner_and_writes_lcm_dag(tmp_path):
         assert result["aggregate"]["metadata"]["operation"] == "rlm.synthesize"
         assert result["aggregate"]["summary_node_id"]
         assert len(result["aggregate"]["source_chunk_ids"]) == 2
+        assert result["worker_long_term_item_ids"]
 
         dag = SummaryDAG(str(tmp_path / "memory.db"))
         try:
@@ -191,6 +244,73 @@ def test_rlm_run_spawns_runner_and_writes_lcm_dag(tmp_path):
             }.issubset(set(node.source_refs))
         finally:
             dag.close()
+    finally:
+        mf.close()
+
+
+def test_rlm_run_indexes_subagent_summary_into_ltm_for_shallow_recall(monkeypatch, tmp_path):
+    class OverviewOperator:
+        provider = "overview"
+        model = "test-model"
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def analyze_rlm_batch(self, *, plan, batch, chunks):
+            del plan, chunks
+            chunk_ref = f"rlm_chunk:{batch['chunk_ids'][0]}"
+            return SubAgentOperationResult(
+                kind="rlm.analyze",
+                provider=self.provider,
+                model=self.model,
+                text=f"GLOBAL_OVERVIEW: telemetry ingress uses HTTPS 4318; reject 4317. {chunk_ref}",
+                elapsed_seconds=0.01,
+                input_hash="analysis-hash",
+            )
+
+        def synthesize_rlm_analyses(self, *, plan, analyses):
+            del plan, analyses
+            return SubAgentOperationResult(
+                kind="rlm.synthesize",
+                provider=self.provider,
+                model=self.model,
+                text="GLOBAL_SUMMARY: facility telemetry ingress endpoint is HTTPS 4318 because old 4317 was rejected.",
+                elapsed_seconds=0.01,
+                input_hash="summary-hash",
+            )
+
+    monkeypatch.setattr(rlm_runner, "SubAgentOperator", OverviewOperator)
+    mf = MemoryForge(str(tmp_path / "memory.db"))
+    try:
+        result = mf.rlm_run(
+            "agent",
+            "Facilities telemetry ingress endpoint is HTTPS 4318. "
+            "The old 4317 value was rejected because it targets the legacy collector. "
+            * 80,
+            limit=1,
+            batch_size=1,
+            chunk_size=1_000,
+            runner="mock",
+            recursive=False,
+        )
+
+        hits = mf.recall_long_term(
+            "agent",
+            "GLOBAL_SUMMARY facility telemetry ingress endpoint rejected 4317",
+            top_k=5,
+            include_content=True,
+        )
+
+        assert result["worker_long_term_item_ids"]
+        assert hits
+        summary_hit = next(hit for hit in hits if hit["source_type"] == "rlm_summary")
+        assert "GLOBAL_SUMMARY" in summary_hit["content"]
+        assert summary_hit["metadata"]["kind"] == "rlm_summary"
+        assert summary_hit["metadata"]["recall_depth"] == "shallow"
+        assert any(ref.startswith("rlm_chunk:") for ref in summary_hit["metadata"]["raw_refs"])
+        assert "rlm_derived" not in summary_hit["streams"]
+        assert "rerank" not in summary_hit["streams"]
+        assert any(hit["source_type"] == "rlm_chunk" for hit in hits)
     finally:
         mf.close()
 

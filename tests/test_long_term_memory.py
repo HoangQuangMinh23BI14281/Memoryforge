@@ -334,11 +334,14 @@ def test_recorded_correction_supersedes_wrong_memory_in_recall(tmp_path):
         )
         wrong_source = mf.long_term_source("agent", wrong_item_id)
 
-        assert hits[0]["item_id"] == correction["item_id"]
-        assert hits[0]["source_type"] == "correction"
-        assert hits[0]["metadata"]["kind"] == "correction"
-        assert hits[0]["metadata"]["confidence"] == "high"
-        assert "amber-17" in hits[0]["content"]
+        by_id = {hit["item_id"]: hit for hit in hits}
+        correction_hit = by_id[correction["item_id"]]
+
+        assert correction_hit["source_type"] == "correction"
+        assert correction_hit["metadata"]["kind"] == "correction"
+        assert correction_hit["metadata"]["confidence"] == "high"
+        assert "amber-17" in correction_hit["content"]
+        assert "rerank" not in correction_hit["streams"]
         assert wrong_source is not None
         assert wrong_source["metadata"]["confidence"] == "low"
         assert correction["item_id"] in wrong_source["metadata"]["superseded_by"]
@@ -383,202 +386,7 @@ def test_ltm_ensemble_keeps_each_retrieval_stream_champion():
     assert selected == ["lexical-answer", "semantic-hit", "shared-noise"]
 
 
-def test_ltm_rerank_does_not_use_exact_entity_or_date_signals():
-    noise = LongTermRecallResult(
-        item_id="noise",
-        source_type="note",
-        source_id="noise",
-        content_id="cnt_noise",
-        raw_ref="note:noise",
-        preview="General benchmark notes without the owner.",
-        score=0.9,
-        streams={"bm25": {"rank": 1, "score": 10.0}},
-        metadata={"kind": "source", "confidence": "normal"},
-    )
-    relevant = LongTermRecallResult(
-        item_id="atlas-owner",
-        source_type="note",
-        source_id="atlas-owner",
-        content_id="cnt_atlas",
-        raw_ref="note:atlas-owner",
-        preview="Project Atlas migration owner is Mina on 2026-06-01.",
-        score=0.1,
-        streams={"vector": {"rank": 1, "score": 0.8}},
-        metadata={
-            "kind": "fact",
-            "confidence": "normal",
-            "entities": ["Project Atlas", "Mina"],
-            "event_date": "2026-06-01",
-            "time_tokens": ["2026", "06", "01"],
-        },
-    )
-
-    reranked = LongTermRetrievalMixin._rerank_results(
-        [noise, relevant],
-        query="Project Atlas owner Mina 2026-06-01",
-    )
-
-    assert reranked[0].item_id == "noise"
-    assert reranked[1].item_id == "atlas-owner"
-    assert reranked[1].streams["fusion"]["score"] == 0.1
-    assert "exact_token_overlap" not in reranked[1].streams["rerank"]
-    assert "entity_overlap" not in reranked[1].streams["rerank"]
-    assert "date_or_freshness_bonus" not in reranked[1].streams["rerank"]
-
-
-def test_ltm_rerank_does_not_reinforce_repeated_token_facts():
-    contested = LongTermRecallResult(
-        item_id="rina",
-        source_type="note",
-        source_id="rina",
-        content_id="cnt_rina",
-        raw_ref="note:rina",
-        preview="Project Atlas owner is Rina.",
-        score=0.64,
-        streams={"bm25": {"rank": 1, "score": 10.0}},
-        metadata={
-            "kind": "fact",
-            "confidence": "normal",
-            "entities": ["Project Atlas", "Rina"],
-        },
-    )
-    support_a = LongTermRecallResult(
-        item_id="mina-a",
-        source_type="note",
-        source_id="mina-a",
-        content_id="cnt_mina_a",
-        raw_ref="note:mina-a",
-        preview="Project Atlas owner is Mina.",
-        score=0.4,
-        streams={"vector": {"rank": 1, "score": 0.8}},
-        metadata={
-            "kind": "fact",
-            "confidence": "normal",
-            "entities": ["Project Atlas", "Mina"],
-        },
-    )
-    support_b = LongTermRecallResult(
-        item_id="mina-b",
-        source_type="note",
-        source_id="mina-b",
-        content_id="cnt_mina_b",
-        raw_ref="note:mina-b",
-        preview="Mina owns Project Atlas.",
-        score=0.39,
-        streams={"bm25": {"rank": 2, "score": 8.0}},
-        metadata={
-            "kind": "fact",
-            "confidence": "normal",
-            "entities": ["Project Atlas", "Mina"],
-        },
-    )
-
-    reranked = LongTermRetrievalMixin._rerank_results(
-        [contested, support_a, support_b],
-        query="Who owns Project Atlas?",
-    )
-    by_id = {result.item_id: result for result in reranked}
-
-    assert reranked[0].item_id == "rina"
-    assert "reinforcement_support" not in by_id["mina-a"].streams["rerank"]
-    assert "reinforcement_support" not in by_id["mina-b"].streams["rerank"]
-    assert "reinforcement_support" not in by_id["rina"].streams["rerank"]
-
-
-def test_ltm_stage2_rerank_requires_normalized_time_tokens_for_date_bonus():
-    result = LongTermRecallResult(
-        item_id="atlas-owner",
-        source_type="note",
-        source_id="atlas-owner",
-        content_id="cnt_atlas",
-        raw_ref="note:atlas-owner",
-        preview="Project Atlas owner is Mina.",
-        score=0.1,
-        streams={"bm25": {"rank": 1, "score": 10.0}},
-        metadata={
-            "kind": "fact",
-            "confidence": "normal",
-            "entities": ["Project Atlas", "Mina"],
-            "event_date": "2026-06-01",
-        },
-    )
-
-    reranked = LongTermRetrievalMixin._rerank_results(
-        [result],
-        query="Project Atlas owner Mina 2026-06-01",
-    )
-
-    assert "date_or_freshness_bonus" not in reranked[0].streams["rerank"]
-
-
-def test_ltm_stage2_rerank_uses_same_session_signal():
-    older = LongTermRecallResult(
-        item_id="older",
-        source_type="message",
-        source_id="older",
-        content_id="cnt_older",
-        raw_ref="message:older",
-        preview="Project Atlas endpoint is alpha.",
-        score=0.5,
-        streams={"bm25": {"rank": 1, "score": 10.0}},
-        metadata={"kind": "fact", "confidence": "normal", "session_id": "session-old"},
-    )
-    current = LongTermRecallResult(
-        item_id="current",
-        source_type="message",
-        source_id="current",
-        content_id="cnt_current",
-        raw_ref="message:current",
-        preview="Project Atlas endpoint is beta.",
-        score=0.4,
-        streams={"vector": {"rank": 1, "score": 0.8}},
-        metadata={"kind": "fact", "confidence": "normal", "session_id": "session-current"},
-    )
-
-    reranked = LongTermRetrievalMixin._rerank_results(
-        [older, current],
-        query="Project Atlas endpoint",
-        session_id="session-current",
-    )
-
-    assert reranked[0].item_id == "current"
-    assert reranked[0].streams["rerank"]["same_session_bonus"] == 1
-
-
-def test_ltm_rerank_does_not_use_source_type_priority_signal():
-    generic_note = LongTermRecallResult(
-        item_id="note",
-        source_type="note",
-        source_id="note",
-        content_id="cnt_note",
-        raw_ref="note:note",
-        preview="Project Atlas endpoint is beta.",
-        score=0.5,
-        streams={"bm25": {"rank": 1, "score": 10.0}},
-        metadata={"kind": "fact", "confidence": "normal"},
-    )
-    direct_message = LongTermRecallResult(
-        item_id="message",
-        source_type="message",
-        source_id="message",
-        content_id="cnt_message",
-        raw_ref="message:message",
-        preview="Project Atlas endpoint is beta.",
-        score=0.45,
-        streams={"vector": {"rank": 1, "score": 0.8}},
-        metadata={"kind": "fact", "confidence": "normal"},
-    )
-
-    reranked = LongTermRetrievalMixin._rerank_results(
-        [generic_note, direct_message],
-        query="Project Atlas endpoint beta",
-    )
-
-    assert reranked[0].item_id == "note"
-    assert "source_type_priority" not in reranked[0].streams["rerank"]
-
-
-def test_ltm_recall_preserves_message_event_date_without_date_rerank(tmp_path):
+def test_ltm_recall_preserves_metadata_without_rerank_scoring(tmp_path):
     db_path = str(tmp_path / "memory.db")
     mf = MemoryForge(db_path)
     try:
@@ -606,12 +414,13 @@ def test_ltm_recall_preserves_message_event_date_without_date_rerank(tmp_path):
         by_session = {hit["metadata"]["session_id"]: hit for hit in hits}
         assert by_session["newer"]["metadata"]["event_date"] == newer_date
         assert by_session["newer"]["metadata"]["timestamp"].startswith("2026-06-21T")
-        assert "date_or_freshness_bonus" not in by_session["newer"]["streams"]["rerank"]
+        assert "rerank" not in by_session["newer"]["streams"]
+        assert "date_or_freshness_bonus" not in by_session["newer"]["streams"]["selection"]
     finally:
         mf.close()
 
 
-def test_core_context_bundle_passes_session_to_ltm_recall(tmp_path):
+def test_core_context_bundle_does_not_apply_same_session_score_bonus(tmp_path):
     db_path = str(tmp_path / "memory.db")
     mf = MemoryForge(db_path)
     try:
@@ -633,44 +442,12 @@ def test_core_context_bundle_passes_session_to_ltm_recall(tmp_path):
             top_k=2,
         )
 
-        assert bundle.long_term_recall[0]["metadata"]["session_id"] == "session-current"
-        assert bundle.long_term_recall[0]["streams"]["rerank"]["same_session_bonus"] == 1
+        assert bundle.long_term_recall
+        for hit in bundle.long_term_recall:
+            assert "rerank" not in hit["streams"]
+            assert "same_session_bonus" not in hit["streams"]["selection"]
     finally:
         mf.close()
-
-
-def test_ltm_stage2_rerank_penalizes_superseded_low_confidence_memory():
-    stale = LongTermRecallResult(
-        item_id="old",
-        source_type="note",
-        source_id="old",
-        content_id="cnt_old",
-        raw_ref="note:old",
-        preview="Project Atlas retention key is blue-12.",
-        score=0.9,
-        streams={"bm25": {"rank": 1, "score": 10.0}},
-        metadata={"kind": "fact", "confidence": "low", "superseded_by": ["new"]},
-    )
-    current = LongTermRecallResult(
-        item_id="new",
-        source_type="correction",
-        source_id="new",
-        content_id="cnt_new",
-        raw_ref="correction:new",
-        preview="Project Atlas retention key is amber-17.",
-        score=0.2,
-        streams={"vector": {"rank": 1, "score": 0.8}},
-        metadata={"kind": "correction", "confidence": "high", "supersedes": ["old"]},
-    )
-
-    reranked = LongTermRetrievalMixin._rerank_results(
-        [stale, current],
-        query="Project Atlas retention key",
-    )
-
-    assert reranked[0].item_id == "new"
-    assert reranked[1].streams["rerank"]["low_confidence_penalty"] == 1
-    assert reranked[1].streams["rerank"]["stale_or_superseded_penalty"] == 1
 
 
 def test_recall_results_expose_fusion_and_selection_diagnostics(tmp_path):
@@ -689,9 +466,11 @@ def test_recall_results_expose_fusion_and_selection_diagnostics(tmp_path):
 
         assert hits
         assert hits[0]["streams"]["fusion"]["score"] >= 0
-        assert hits[0]["streams"]["selection"]["final_score"] == round(hits[0]["score"], 6)
-        assert hits[0]["streams"]["selection"]["bonus"] == 0
-        assert hits[0]["streams"]["rerank"] == hits[0]["streams"]["selection"]
+        assert hits[0]["streams"]["selection"]["fused_score"] == hits[0]["score"]
+        assert hits[0]["streams"]["selection"]["selected_rank"] == 1
+        assert "bonus" not in hits[0]["streams"]["selection"]
+        assert "final_score" not in hits[0]["streams"]["selection"]
+        assert "rerank" not in hits[0]["streams"]
 
         bundle = mf.build_core_context_bundle(
             agent_id="agent",

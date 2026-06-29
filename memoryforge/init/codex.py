@@ -16,17 +16,17 @@ MEMORYFORGE_MCP_NAME = "memoryforge"
 
 MEMORYFORGE_AGENTS_CONTENT = """# MemoryForge Project Memory
 
-Use MemoryForge MCP as the first path for repository memory questions about docs, decisions, setup, schema, architecture, roadmap, prior conversation, or long project context.
+MemoryForge is the project memory layer for this repository. Use it before raw grep when the user asks about prior decisions, docs, setup, architecture, roadmap, or long-running context.
 
-- Do not start routine fact lookups with `ensure_project_memory(auto_index=true)`.
-- Call `ensure_project_memory` only to verify that the project is initialized or when MemoryForge reports missing project state.
-- Call `autoload_markdown` only when Markdown may have changed or when recall returns stale or empty evidence.
-- Use `recall_memory` first for factual project-memory questions.
-- Use `build_context_bundle` when the answer needs grounded multi-source context for the core model.
-- Use `rlm_load`, `rlm_search`, and `rlm_chunk_get` for large files or documents instead of reading everything into the prompt.
-- Use `rlm_run` only when the task needs real Codex CLI sub-agent analysis over large context.
+- Use MCP `recall_memory` first for factual project-memory questions.
+- Use MCP `build_context_bundle` when the answer needs grounded LCM/LTM context before responding.
+- WSL/Linux hooks are the required Codex CLI lifecycle path. Completed Codex turns are auto-captured into LCM after `/hooks` trust. The hook is local-only: it does not call a model and does not run `codex exec`.
+- If hooks are not active or not trusted, stop and tell the user MemoryForge LCM capture is unavailable for this Codex session.
+- Use MCP `index_analyze` when large Markdown needs RLM host-subagent analysis. It indexes raw chunks, returns `plans[].batches[].host_subagent_prompt`, and does not call a model. Treat each returned prompt as a host-subagent task. Each subagent fetches chunks, cites `rlm_chunk:<id>`, then records its output with the returned `record_command_argv`. Run the returned `aggregate_command_argv` only after every planned batch is recorded.
+- For explicit CLI indexing, use `uv run memoryforge index . --agent-id codex`; add `--analyze` only when host-subagent RLM summaries are needed.
+- Do not call low-level RLM MCP tools from Codex interactive mode.
+- Inspect LCM state with `uv run memoryforge --db .memoryforge/memory.db lcm-sessions`, `lcm-messages`, `lcm-context`, and `lcm-summary`.
 - Fall back to `rg`, `Get-Content`, or direct file reads only if MemoryForge MCP is unavailable or returns no relevant evidence.
-- Prefer MemoryForge provenance over raw workspace grep when both are available.
 - The project-local database is `.memoryforge/memory.db` unless `MEMORYFORGE_DB` explicitly overrides it.
 """
 

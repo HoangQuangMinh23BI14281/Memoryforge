@@ -204,6 +204,81 @@ class LongTermIndexingMixin:
             [self._rlm_chunk_item(agent_id, by_id[chunk_id]) for chunk_id in chunk_ids if chunk_id in by_id]
         )
 
+    def index_rlm_worker_result(self, agent_id: str, worker_result: dict[str, Any]) -> list[str]:
+        """Index RLM sub-agent analyses and aggregate summaries into LTM.
+
+        RLM chunks remain the lossless deep source. These derived items are the
+        shallow recall layer LCM can inject first; their metadata keeps exact
+        rlm_chunk refs for later rehydration.
+        """
+
+        items: list[dict[str, Any]] = []
+        for record in _worker_records(worker_result):
+            analysis_text = str(record.get("analysis") or "").strip()
+            if not analysis_text:
+                continue
+            source_id = str(
+                record.get("summary_node_id")
+                or record.get("analysis_id")
+                or f"{record.get('run_id')}:batch:{(record.get('metadata') or {}).get('batch_index')}"
+            )
+            chunk_ids = _string_list(record.get("chunk_ids"))
+            metadata = _rlm_worker_metadata(
+                kind="rlm_analysis",
+                run_id=record.get("run_id") or _worker_run_id(worker_result),
+                chunk_ids=chunk_ids,
+                source_refs=_chunk_refs(chunk_ids, record.get("source_refs")),
+                summary_node_id=record.get("summary_node_id"),
+                message_id=record.get("message_id"),
+                extra=dict(record.get("metadata") or {}),
+            )
+            items.append(
+                {
+                    "agent_id": agent_id,
+                    "source_type": "rlm_analysis",
+                    "source_id": source_id,
+                    "text": analysis_text,
+                    "metadata": metadata,
+                }
+            )
+
+        aggregate = worker_result.get("aggregate")
+        if isinstance(aggregate, dict):
+            summary_text = str(aggregate.get("summary") or "").strip()
+            if summary_text:
+                chunk_ids = _string_list(aggregate.get("source_chunk_ids"))
+                source_refs = _chunk_refs(chunk_ids, aggregate.get("source_refs"))
+                source_id = str(
+                    aggregate.get("aggregate_id")
+                    or aggregate.get("summary_node_id")
+                    or aggregate.get("run_id")
+                    or "aggregate"
+                )
+                metadata = _rlm_worker_metadata(
+                    kind="rlm_summary",
+                    run_id=aggregate.get("run_id") or _worker_run_id(worker_result),
+                    chunk_ids=chunk_ids,
+                    source_refs=source_refs,
+                    summary_node_id=aggregate.get("summary_node_id"),
+                    message_id=aggregate.get("message_id"),
+                    extra={
+                        **dict(aggregate.get("metadata") or {}),
+                        "aggregate_id": aggregate.get("aggregate_id"),
+                        "child_node_ids": _string_list(aggregate.get("child_node_ids")),
+                    },
+                )
+                items.append(
+                    {
+                        "agent_id": agent_id,
+                        "source_type": "rlm_summary",
+                        "source_id": source_id,
+                        "text": summary_text,
+                        "metadata": metadata,
+                    }
+                )
+
+        return self.index_raw_items(items)
+
     def index_raw_item(
         self,
         agent_id: str,
@@ -578,6 +653,60 @@ def _memory_metadata(source_type: str, source_id: str, metadata: dict[str, Any])
         )
         normalized[MetadataField.SOURCE_ORIGIN] = str(origin)
     return normalized
+
+
+def _worker_records(worker_result: dict[str, Any]) -> list[dict[str, Any]]:
+    records = worker_result.get("records")
+    return [record for record in records if isinstance(record, dict)] if isinstance(records, list) else []
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item)]
+
+
+def _chunk_refs(chunk_ids: list[str], existing_refs: Any = None) -> list[str]:
+    refs = [str(ref) for ref in existing_refs if str(ref)] if isinstance(existing_refs, list) else []
+    for chunk_id in chunk_ids:
+        ref = f"rlm_chunk:{chunk_id}"
+        if ref not in refs:
+            refs.append(ref)
+    return refs
+
+
+def _worker_run_id(worker_result: dict[str, Any]) -> Any:
+    plan = worker_result.get("plan")
+    return plan.get("run_id") if isinstance(plan, dict) else None
+
+
+def _rlm_worker_metadata(
+    *,
+    kind: str,
+    run_id: Any,
+    chunk_ids: list[str],
+    source_refs: list[str],
+    summary_node_id: Any,
+    message_id: Any,
+    extra: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = dict(extra)
+    metadata.update(
+        {
+            MetadataField.KIND: kind,
+            MetadataField.SOURCE_ORIGIN: "rlm_worker",
+            MetadataField.CONFIDENCE: metadata.get(MetadataField.CONFIDENCE)
+            or "medium",
+            "run_id": str(run_id) if run_id else None,
+            "chunk_ids": chunk_ids,
+            "summary_node_id": str(summary_node_id) if summary_node_id else None,
+            "message_id": str(message_id) if message_id else None,
+            "derived_from": "rlm_subagent",
+            "recall_depth": "shallow",
+            MetadataField.RAW_REFS: source_refs,
+        }
+    )
+    return {key: value for key, value in metadata.items() if value not in (None, [], {})}
 
 
 def _begin_immediate(conn: sqlite3.Connection) -> bool:

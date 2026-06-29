@@ -10,6 +10,7 @@ from typing import Any
 
 from memoryforge.api import MemoryForge
 from memoryforge.init import handle_hook_event, init_project
+from memoryforge.init.autoload import index_project_markdown, plan_project_markdown_analysis
 
 
 def _print_json(payload: Any) -> None:
@@ -33,7 +34,7 @@ def run_command(args: argparse.Namespace) -> int:
                 agent_id=args.agent_id,
                 configure_codex=bool(getattr(args, "configure_codex", False)),
                 auto_index=auto_index,
-                install_hooks=False,
+                install_hooks=bool(getattr(args, "install_hooks", False)),
                 force=args.force,
             )
         )
@@ -41,7 +42,10 @@ def run_command(args: argparse.Namespace) -> int:
     if args.command == "hook":
         import sys
 
-        stdin_text = sys.stdin.read()
+        try:
+            stdin_text = "" if sys.stdin.closed or sys.stdin.isatty() else sys.stdin.read()
+        except OSError:
+            stdin_text = ""
         try:
             payload = handle_hook_event(
                 event=args.event,
@@ -49,6 +53,8 @@ def run_command(args: argparse.Namespace) -> int:
                 agent_id=args.agent_id,
                 project_root=args.project_root,
                 stdin_text=stdin_text,
+                source=args.source,
+                runtime=args.runtime,
             )
         except Exception as exc:
             if os.environ.get("MEMORYFORGE_HOOK_STRICT") == "1":
@@ -60,6 +66,56 @@ def run_command(args: argparse.Namespace) -> int:
                 "skipped": "hook failure ignored",
             }
         _print_json(payload)
+        return 0
+    if args.command == "index":
+        project_root = Path(args.path).expanduser().resolve()
+        db_path = _resolve_project_db_path(args.db, project_root)
+        raw_result = index_project_markdown(
+            db_path=db_path,
+            agent_id=args.agent_id,
+            project_root=str(project_root),
+            chunk_size=args.chunk_size,
+            overlap=args.overlap,
+            max_files=args.max_files,
+            max_file_bytes=args.max_file_bytes,
+        )
+        analyze_result = {"enabled": False, "skipped": "pass --analyze to prepare host sub-agent batches"}
+        if args.analyze:
+            analyze_result = plan_project_markdown_analysis(
+                db_path=db_path,
+                agent_id=args.agent_id,
+                project_root=str(project_root),
+                chunk_size=args.chunk_size,
+                overlap=args.overlap,
+                max_files=args.analyze_max_files,
+                max_file_bytes=args.max_file_bytes,
+                min_file_bytes=args.analyze_min_bytes,
+                limit=args.limit,
+                batch_size=args.batch_size,
+                force=args.force,
+            )
+            ignored = [
+                name
+                for name, value in {
+                    "runner": args.runner if args.runner != "host" else None,
+                    "model": args.model,
+                    "base_url": args.base_url,
+                    "timeout": args.timeout if args.timeout != 900.0 else None,
+                    "max_workers": args.max_workers if args.max_workers != 1 else None,
+                    "max_retries": args.max_retries if args.max_retries != 0 else None,
+                    "allow_partial": args.allow_partial or None,
+                    "no_synthesis": args.no_synthesis or None,
+                    "no_recursive": args.no_recursive or None,
+                    "max_recursive_rounds": (
+                        args.max_recursive_rounds if args.max_recursive_rounds != 2 else None
+                    ),
+                    "recursive_token_limit": args.recursive_token_limit,
+                }.items()
+                if value is not None
+            ]
+            if ignored:
+                analyze_result["ignored_external_runner_options"] = ignored
+        _print_json({"enabled": True, "mode": "raw", "raw": raw_result, "analyze": analyze_result})
         return 0
     mf = MemoryForge(db_path=args.db)
     try:
@@ -192,6 +248,36 @@ def run_command(args: argparse.Namespace) -> int:
                     "messages": [message.__dict__ for message in context.messages],
                 }
             )
+        elif args.command == "lcm-sessions":
+            from memoryforge.lcm import ContextBudget
+
+            budget = ContextBudget(
+                model_context_limit=args.context_limit,
+                reserved_output_tokens=args.reserved_output,
+                compaction_buffer=args.compaction_buffer,
+            )
+            _print_json(_lcm_sessions_payload(mf, agent_id=args.agent_id, limit=args.limit, budget=budget))
+        elif args.command == "lcm-messages":
+            _print_json(
+                _lcm_messages_payload(
+                    mf,
+                    session_id=args.session_id,
+                    agent_id=args.agent_id,
+                    limit=args.limit,
+                    include_content=args.include_content,
+                    include_summaries=args.include_summaries,
+                )
+            )
+        elif args.command == "lcm-summary":
+            _print_json(
+                _lcm_summary_payload(
+                    mf,
+                    session_id=args.session_id,
+                    limit=args.limit,
+                    include_content=args.include_content,
+                    include_superseded=args.all,
+                )
+            )
         elif args.command == "lcm-compact":
             from memoryforge.lcm import ContextBudget
 
@@ -317,7 +403,14 @@ def run_command(args: argparse.Namespace) -> int:
             summary = (
                 Path(args.summary_file).read_text(encoding="utf-8") if args.summary_file else None
             )
-            _print_json(mf.rlm_aggregate(args.agent_id, args.run_id, summary=summary))
+            _print_json(
+                mf.rlm_aggregate(
+                    args.agent_id,
+                    args.run_id,
+                    summary=summary,
+                    expected_batch_count=args.expected_batches,
+                )
+            )
         elif args.command == "rlm-run":
             value = None
             if args.input:
@@ -380,3 +473,191 @@ def run_command(args: argparse.Namespace) -> int:
     finally:
         mf.close()
     return 0
+
+
+def _resolve_project_db_path(db_arg: str, project_root: Path) -> str:
+    if db_arg != "~/.memoryforge/memory.db":
+        return db_arg
+    config_path = project_root / ".memoryforge" / "config.json"
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            configured = config.get("db_path")
+            if configured:
+                return str(configured)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return str(project_root / ".memoryforge" / "memory.db")
+
+
+def _lcm_sessions_payload(
+    mf: MemoryForge,
+    *,
+    agent_id: str | None,
+    limit: int,
+    budget: Any,
+) -> dict[str, Any]:
+    params: list[Any] = []
+    where = ""
+    if agent_id:
+        where = "WHERE s.agent = ?"
+        params.append(agent_id)
+    rows = mf.lcm_store.conn.execute(
+        f"""
+        SELECT
+            s.id,
+            s.agent,
+            s.created_at,
+            s.updated_at,
+            (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id AND m.is_summary = 0),
+            (SELECT COALESCE(SUM(tokens_total), 0)
+             FROM messages m WHERE m.session_id = s.id AND m.is_summary = 0),
+            (SELECT COUNT(*) FROM summary_nodes sn
+             WHERE sn.session_id = s.id AND sn.superseded = 0),
+            (SELECT COUNT(*) FROM context_items ci WHERE ci.session_id = s.id)
+        FROM sessions s
+        {where}
+        ORDER BY s.updated_at DESC
+        LIMIT ?
+        """,
+        [*params, max(1, int(limit))],
+    ).fetchall()
+    sessions: list[dict[str, Any]] = []
+    for row in rows:
+        context = mf.lcm_build_context(str(row[0]), budget=budget)
+        sessions.append(
+            {
+                "session_id": row[0],
+                "agent_id": row[1],
+                "created_at": row[2],
+                "updated_at": row[3],
+                "message_count": row[4],
+                "stored_tokens": row[5],
+                "active_summary_count": row[6],
+                "context_item_count": row[7],
+                "active_context_tokens": context.token_estimate,
+                "active_context_messages": len(context.messages),
+                "has_summary": context.has_summary,
+                "truncated": context.truncated,
+                "soft_limit": context.budget.soft_limit,
+                "hard_limit": context.budget.hard_limit,
+            }
+        )
+    return {"sessions": sessions, "count": len(sessions)}
+
+
+def _lcm_messages_payload(
+    mf: MemoryForge,
+    *,
+    session_id: str,
+    agent_id: str | None,
+    limit: int,
+    include_content: bool,
+    include_summaries: bool,
+) -> dict[str, Any]:
+    messages = mf.lcm_store.get_messages(session_id, include_summaries=include_summaries)
+    if agent_id:
+        messages = [message for message in messages if message.agent_id == agent_id]
+    selected = messages[-max(1, int(limit)) :]
+    return {
+        "session_id": session_id,
+        "count": len(selected),
+        "total_matching": len(messages),
+        "messages": [
+            {
+                "id": message.id,
+                "role": message.role,
+                "agent_id": message.agent_id,
+                "created_at": message.created_at,
+                "is_summary": message.is_summary,
+                "token_estimate": message.token_estimate,
+                "parts": [
+                    {
+                        "id": part.id,
+                        "part_type": part.part_type,
+                        "content_id": part.content_id,
+                        "token_estimate": part.token_estimate,
+                        "tool_name": part.tool_name,
+                        "tool_call_id": part.tool_call_id,
+                        "tool_state": part.tool_state,
+                        "compacted_at": part.compacted_at,
+                        **(
+                            {"content": part.content}
+                            if include_content
+                            else {"preview": _preview(part.content)}
+                        ),
+                    }
+                    for part in message.parts
+                ],
+            }
+            for message in selected
+        ],
+    }
+
+
+def _lcm_summary_payload(
+    mf: MemoryForge,
+    *,
+    session_id: str,
+    limit: int,
+    include_content: bool,
+    include_superseded: bool,
+) -> dict[str, Any]:
+    where = "session_id = ?"
+    params: list[Any] = [session_id]
+    if not include_superseded:
+        where += " AND superseded = 0"
+    rows = mf.lcm_engine.dag.conn.execute(
+        f"""
+        SELECT id, level, kind, span_start_message_id, span_end_message_id,
+               token_count, created_at, parent_node_ids, superseded, file_ids,
+               source_refs, content
+        FROM summary_nodes
+        WHERE {where}
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        [*params, max(1, int(limit))],
+    ).fetchall()
+    nodes = []
+    for row in rows:
+        nodes.append(
+            {
+                "id": row[0],
+                "level": row[1],
+                "kind": row[2],
+                "span_start": row[3],
+                "span_end": row[4],
+                "token_count": row[5],
+                "created_at": row[6],
+                "parent_node_ids": _json_list(row[7]),
+                "superseded": bool(row[8]),
+                "file_ids": _json_list(row[9]),
+                "source_refs": _json_list(row[10]),
+                **(
+                    {"content": row[11]}
+                    if include_content
+                    else {"preview": _preview(str(row[11] or ""))}
+                ),
+            }
+        )
+    return {"session_id": session_id, "count": len(nodes), "summary_nodes": nodes}
+
+
+def _preview(text: str, limit: int = 240) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "..."
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str) or not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []

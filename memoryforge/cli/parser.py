@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 
 PUBLIC_RUNNER_CHOICES = ["auto", "codex", "mock"]
+INDEX_RUNNER_CHOICES = ["host", "auto", "codex", "mock"]
 PUBLIC_RUNNER_HELP = (
     "Sub-agent backend. Use auto/codex for real runs, mock for tests. "
     "Advanced backends remain available through MEMORYFORGE_SUBAGENT_RUNNER."
@@ -94,6 +95,56 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runtime_context.add_argument("--long-term-token-budget", type=int, default=None)
 
+    index_cmd = subcommands.add_parser(
+        "index",
+        help="Index project Markdown into LTM. Use --analyze to prepare host sub-agent batches.",
+    )
+    index_cmd.add_argument("path", nargs="?", default=".")
+    index_cmd.add_argument("--agent-id", default="codex")
+    index_cmd.add_argument("--chunk-size", type=int, default=12_000)
+    index_cmd.add_argument("--overlap", type=int, default=1_000)
+    index_cmd.add_argument("--max-files", type=int, default=200)
+    index_cmd.add_argument("--max-file-bytes", type=int, default=1_000_000)
+    index_cmd.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Also prepare RLM host-subagent dispatch plans for selected large Markdown files.",
+    )
+    index_cmd.add_argument(
+        "--analyze-min-bytes",
+        type=int,
+        default=20_000,
+        help="Only run sub-agent analysis for Markdown files at least this large.",
+    )
+    index_cmd.add_argument(
+        "--analyze-max-files",
+        type=int,
+        default=5,
+        help="Maximum number of Markdown files to analyze with sub-agents.",
+    )
+    index_cmd.add_argument(
+        "--runner",
+        default="host",
+        choices=INDEX_RUNNER_CHOICES,
+        help=(
+            "Compatibility flag. index --analyze now uses host-managed subagents and does "
+            "not spawn external runners; non-host values are ignored."
+        ),
+    )
+    index_cmd.add_argument("--model", help="Compatibility flag ignored by index --analyze")
+    index_cmd.add_argument("--base-url", help=argparse.SUPPRESS)
+    index_cmd.add_argument("--timeout", type=float, default=900.0)
+    index_cmd.add_argument("--limit", type=int, default=10_000)
+    index_cmd.add_argument("--batch-size", type=int, default=None)
+    index_cmd.add_argument("--max-workers", type=int, default=1)
+    index_cmd.add_argument("--max-retries", type=int, default=0)
+    index_cmd.add_argument("--allow-partial", action="store_true")
+    index_cmd.add_argument("--no-synthesis", action="store_true")
+    index_cmd.add_argument("--no-recursive", action="store_true")
+    index_cmd.add_argument("--max-recursive-rounds", type=int, default=2)
+    index_cmd.add_argument("--recursive-token-limit", type=int)
+    index_cmd.add_argument("--force", action="store_true")
+
     memory_source = subcommands.add_parser(
         "long-term-source", help="Fetch immutable raw source for an LTM item"
     )
@@ -110,6 +161,32 @@ def build_parser() -> argparse.ArgumentParser:
     lcm_context.add_argument("--agent-id")
     lcm_context.add_argument("--recall-query")
     lcm_context.add_argument("--recall-limit", type=int, default=5)
+
+    lcm_sessions = subcommands.add_parser(
+        "lcm-sessions", help="List LCM sessions with message and token counts"
+    )
+    lcm_sessions.add_argument("--agent-id")
+    lcm_sessions.add_argument("--limit", type=int, default=20)
+    lcm_sessions.add_argument("--context-limit", type=int, default=200_000)
+    lcm_sessions.add_argument("--reserved-output", type=int, default=4_000)
+    lcm_sessions.add_argument("--compaction-buffer", type=int, default=2_000)
+
+    lcm_messages = subcommands.add_parser(
+        "lcm-messages", help="List stored LCM messages and parts for a session"
+    )
+    lcm_messages.add_argument("--session-id", required=True)
+    lcm_messages.add_argument("--agent-id")
+    lcm_messages.add_argument("--limit", type=int, default=50)
+    lcm_messages.add_argument("--include-content", action="store_true")
+    lcm_messages.add_argument("--include-summaries", action="store_true")
+
+    lcm_summary = subcommands.add_parser(
+        "lcm-summary", help="List LCM summary DAG nodes for a session"
+    )
+    lcm_summary.add_argument("--session-id", required=True)
+    lcm_summary.add_argument("--limit", type=int, default=20)
+    lcm_summary.add_argument("--include-content", action="store_true")
+    lcm_summary.add_argument("--all", action="store_true", help="Include superseded summary nodes")
 
     lcm_compact = subcommands.add_parser(
         "lcm-compact", help="Run LCM soft/hard threshold compaction"
@@ -208,9 +285,15 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--agent-id", required=True)
     aggregate.add_argument("--run-id", required=True)
     aggregate.add_argument("--summary-file", help="Optional final synthesis text file")
+    aggregate.add_argument(
+        "--expected-batches",
+        type=int,
+        help="Validate that every planned host-subagent batch was recorded before aggregation",
+    )
 
     rlm_run = subcommands.add_parser(
-        "rlm-run", help="Run RLM with spawned sub-agents and store results in LCM"
+        "rlm-run",
+        help="Legacy/debug RLM runner. Prefer `memoryforge index --analyze` host-subagent plans.",
     )
     rlm_run.add_argument(
         "input", nargs="?", help="Prompt text or file path. Omit when using --buffer-id"
@@ -250,7 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Persist successful RLM batch records even when another batch fails.",
     )
-    rlm_run.add_argument("--no-synthesis", action="store_true", help="Skip spawned final synthesis")
+    rlm_run.add_argument("--no-synthesis", action="store_true", help="Skip legacy final synthesis")
     rlm_run.add_argument(
         "--no-recursive", action="store_true", help="Disable recursive aggregate reduction"
     )
@@ -295,14 +378,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run Codex CLI setup and register the MemoryForge MCP server.",
     )
+    init_cmd.add_argument(
+        "--install-hooks",
+        action="store_true",
+        help=(
+            "Install the lightweight project-local MemoryForge LCM hook runner for the "
+            "current shell platform. In WSL/Linux this writes a .sh runner and a Codex "
+            ".codex/hooks.json adapter; the hook does not call a model."
+        ),
+    )
     init_cmd.add_argument("--force", action="store_true")
 
 
-    hook = subcommands.add_parser("hook", help="Internal Codex hook ingestion endpoint")
+    hook = subcommands.add_parser("hook", help="Internal MemoryForge hook ingestion endpoint")
     hook.add_argument("event")
     hook.add_argument("--db", required=True)
     hook.add_argument("--agent-id", default="codex")
     hook.add_argument("--project-root", default=".")
+    hook.add_argument("--source", default="memoryforge_hook")
+    hook.add_argument("--runtime", default="auto")
 
     subcommands.add_parser("mcp-server", help="Run the MCP server")
     return parser

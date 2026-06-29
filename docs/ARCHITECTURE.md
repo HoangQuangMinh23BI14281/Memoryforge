@@ -17,7 +17,7 @@ Host/core model
 
 MemoryForge API
   -> SQLite memory.db
-  -> optional RLM/LCM workers
+  -> optional LCM compaction workers
 ```
 
 Rules:
@@ -25,8 +25,8 @@ Rules:
 - The core model is outside MemoryForge.
 - `build_core_context_bundle(...)` retrieves memory and assembles context only.
 - LTM does not call a model.
-- RLM may call a worker in `rlm_run(...)`.
-- LCM may call a worker during compaction.
+- RLM indexing does not call a model; `index --analyze` and MCP `index_analyze` return host-subagent plans.
+- LCM does not spawn a worker by default; explicit `--runner` compaction uses the shared sub-agent execution layer.
 - Benchmark answer runners are benchmark/core answer runners, not LTM.
 
 ## Main Code Boundaries
@@ -34,8 +34,8 @@ Rules:
 | Area | Current Code | Owns | Model Call? |
 | --- | --- | --- | --- |
 | API facade | `memoryforge/api/app.py` | `MemoryForge` orchestration | No final answer call |
-| LCM | `memoryforge/lcm/...` | live session context and summaries | Optional compaction worker |
-| RLM | `memoryforge/rlm/...` | large source loading, chunking, dispatch | Optional RLM worker |
+| LCM | `memoryforge/lcm/...` | live session context and summaries | Deterministic by default; optional explicit compaction worker |
+| RLM | `memoryforge/rlm/...` | large source loading, chunking, dispatch, host-subagent record/aggregate | Host agent executes subagents |
 | LTM | `memoryforge/memory/longterm/...` | durable memory indexing and recall | No |
 | Vector | `memoryforge/search/vector.py` | embedding cache and local vector search | Embedding model only |
 | FTS | `memoryforge/search/fts.py` | lexical search index or fallback table | No |
@@ -141,7 +141,7 @@ Conversation ingestion:
 6. embedding row in `vec_index`
 7. `LongTermMemoryIndex.index_messages(...)` creates `long_term_items`
 
-Large source ingestion:
+Large source ingestion without worker:
 
 1. `MemoryForge.ingest_file(...)` or `MemoryForge.rlm_load(...)`
 2. `RLMEngine.load(...)`
@@ -151,6 +151,16 @@ Large source ingestion:
 6. chunk text rows in `content_store`
 7. `LongTermMemoryIndex.index_rlm_buffer(...)` creates `long_term_items`
 8. lexical and vector indexes are updated
+
+Large source analysis with host subagents:
+
+1. `memoryforge index --analyze` or MCP `index_analyze` loads/indexes raw chunks and returns a dispatch plan
+2. the active host agent runs one subagent per planned batch
+3. each subagent fetches chunks with `rlm-chunk-get` and cites `rlm_chunk:<id>`
+4. `rlm-record` stores worker outputs as LCM messages and SummaryDAG leaves
+5. `aggregate --expected-batches N` creates the aggregate SummaryDAG parent
+6. `LongTermMemoryIndex.index_rlm_worker_result(...)` creates `rlm_analysis` and `rlm_summary` LTM rows
+7. the original `rlm_chunk` rows remain the lossless deep source refs
 
 Question-time context:
 
@@ -173,11 +183,11 @@ Current LTM retrieval uses:
 - semantic search through `vec_index`
 - reciprocal-rank fusion
 - stream champions so BM25 and vector hits both survive
-- deterministic local selection signals
+- lightweight candidate-selection diagnostics
 
-Public diagnostics expose Stage 2 as `selection`, a deterministic local pass over
-retrieved candidates. The older `rerank` stream key remains as a compatibility
-alias only; it is not an LLM reranker.
+Public diagnostics expose Stage 2 as `selection`. It records why a candidate
+survived, for example BM25 champion or vector champion. The default LTM path
+does not run a model reranker and does not apply metadata bonus/penalty scoring.
 
 ## Vector Storage
 

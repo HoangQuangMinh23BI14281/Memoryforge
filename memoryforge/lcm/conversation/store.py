@@ -119,19 +119,22 @@ class ConversationStore:
         ]
 
         turn_ids: list[str] = []
-        for turn in normalized:
-            message_id = self.message_store.append_text_message(
+        for index, turn in enumerate(normalized):
+            raw_turn = turns[index] if index < len(turns) else turn
+            parts = _parts_from_turn(raw_turn, fallback_content=turn.content)
+            message_id = self.message_store.append_message(
                 agent_id=agent_id,
                 session_id=session_id,
                 role=turn.role,
-                content=turn.content,
+                parts=parts,
                 created_at_ms=int(event_date * 1000),
             )
             message = self.message_store.get_message(message_id)
             content_id = message.parts[0].content_id if message and message.parts else ""
-            self.bm25.index_turn(agent_id, session_id, turn.role, turn.content, content_id)
+            searchable_content = _searchable_content(parts)
+            self.bm25.index_turn(agent_id, session_id, turn.role, searchable_content, content_id)
             if content_id:
-                self.vector.add(content_id, turn.content)
+                self.vector.add(content_id, searchable_content)
             turn_ids.append(message_id)
         return turn_ids
 
@@ -240,3 +243,31 @@ class ConversationStore:
                 conn.close()
             setattr(self, component_name, None)
         self.conn.close()
+
+
+def _parts_from_turn(
+    turn: ConversationTurn | dict[str, Any],
+    *,
+    fallback_content: str,
+) -> list[dict[str, Any]]:
+    if isinstance(turn, dict):
+        raw_parts = turn.get("parts")
+        if isinstance(raw_parts, list):
+            parts = [dict(part) for part in raw_parts if isinstance(part, dict)]
+            if parts:
+                return parts
+        part_type = str(turn.get("part_type") or "text")
+        part: dict[str, Any] = {
+            "part_type": part_type,
+            "content": str(turn.get("content", fallback_content)),
+        }
+        for key in ("tool_name", "tool_call_id", "tool_state", "token_estimate", "protected"):
+            if key in turn:
+                part[key] = turn[key]
+        return [part]
+    return [{"part_type": "text", "content": fallback_content}]
+
+
+def _searchable_content(parts: list[dict[str, Any]]) -> str:
+    content = "\n".join(str(part.get("content", "")) for part in parts if part.get("content"))
+    return content.strip()

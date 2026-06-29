@@ -106,9 +106,11 @@ def test_longmemeval_adapter_marks_answer_evidence_metadata(tmp_path):
         adapter.ingest_case(mf, case, agent_id="longmemeval")
         hits = mf.recall_long_term("longmemeval", "Blue Bottle", top_k=2)
 
-        assert hits[0]["metadata"][MetadataField.ANSWER_EVIDENCE] is True
-        assert hits[0]["metadata"][MetadataField.BENCHMARK_SESSION_ID] == "session-a"
-        assert hits[0]["streams"]["rerank"]["answer_evidence_bonus"] == 1
+        evidence_hit = next(
+            hit for hit in hits if hit["metadata"].get(MetadataField.ANSWER_EVIDENCE) is True
+        )
+        assert evidence_hit["metadata"][MetadataField.BENCHMARK_SESSION_ID] == "session-a"
+        assert "rerank" not in evidence_hit["streams"]
     finally:
         mf.close()
 
@@ -148,8 +150,10 @@ def test_locomo_adapter_marks_dialogue_evidence_metadata(tmp_path):
         adapter.ingest_case(mf, case, agent_id="locomo")
         hits = mf.recall_long_term("locomo", "adoption agencies", top_k=2)
 
-        assert hits[0]["metadata"][MetadataField.ANSWER_EVIDENCE] is True
-        assert hits[0]["metadata"][MetadataField.BENCHMARK_DIALOGUE_ID] == "D1:1"
-        assert hits[0]["streams"]["rerank"]["answer_evidence_bonus"] == 1
+        evidence_hit = next(
+            hit for hit in hits if hit["metadata"].get(MetadataField.ANSWER_EVIDENCE) is True
+        )
+        assert evidence_hit["metadata"][MetadataField.BENCHMARK_DIALOGUE_ID] == "D1:1"
+        assert "rerank" not in evidence_hit["streams"]
     finally:
         mf.close()

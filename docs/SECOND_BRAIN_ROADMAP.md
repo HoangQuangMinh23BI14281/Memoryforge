@@ -110,7 +110,7 @@ Current state:
 | Area | Status | Evidence in the current design |
 | --- | --- | --- |
 | Core model boundary | Implemented | MemoryForge returns `CoreContextBundle`; LTM does not answer with a model. |
-| RLM/LCM worker boundary | Implemented | RLM and LCM can use bounded sub-agent workers; benchmark answer runners are named separately. |
+| RLM/LCM worker boundary | Implemented | RLM uses host-managed subagent plans; LCM uses deterministic compaction by default and only uses a worker when explicitly requested. Benchmark answer runners are named separately. |
 | Stable schema discipline | Implemented | New behavior uses `long_term_items.metadata`, rebuildable FTS/vector indexes, and internal LCM summary refs rather than new source-of-truth tables. |
 | RLM -> LTM ingestion | Implemented | `rlm_load` chunks sources once, indexes chunks into LTM, and reports ingestion manifests/dedupe/vector stats. |
 | Vector cache | Implemented | `vec_index.cache_key` is model-qualified and content-hash based when text is available. |
@@ -136,8 +136,7 @@ What is still not done:
 - Reduce API/mixin surface where implementation details still leak across
   module boundaries.
 - Keep public diagnostics on `selection` terminology. The historical `rerank`
-  stream key is retained only as a compatibility alias; the underlying behavior
-  remains local model-free selection.
+  stream key is removed from default recall output.
 
 ### Definition of Done
 
@@ -170,7 +169,7 @@ These are the remaining practical slices before the roadmap can be called done:
 
 | Slice | Purpose | Expected effort |
 | --- | --- | --- |
-| Diagnostics naming cleanup | Implemented: public diagnostics expose local `selection`; historical `rerank` is compatibility-only. | Done |
+| Diagnostics naming cleanup | Implemented: public diagnostics expose local `selection`; no `rerank` stream is emitted by default. | Done |
 | Memory-controller hardening | Partially implemented: task updates, entity-profile merge policy, and metadata-first turn classification use metadata only. Broader transient-noise policy still needs hardening. | Medium |
 | API boundary cleanup | Reduce implicit mixin surface and document RLM/LCM/LTM boundaries. | Medium |
 | Real benchmark refresh | Re-run current full LongMemEval/LoCoMo after recent retrieval/context changes with real model settings. Subset no-ingest context-only and LongMemEval core-answer runs are refreshed. | Medium to large, mostly runtime latency |
@@ -263,18 +262,14 @@ Stage 1:
 
 Stage 2 local selection:
 
-- Apply local selection signals without calling an LLM:
-  - exact answer-bearing terms
-  - session/date proximity
-  - source type priority
-  - repeated fact reinforcement
-  - entity match
-  - answer-session metadata when benchmark data exposes it
+- Preserve important candidates without calling an LLM:
+  - BM25 champion
+  - vector champion
+  - RLM shallow candidate when a worker-derived summary matches
 
 LLM reranking should be optional and off the hot path. Current LTM behavior does
-not call an LLM here. Diagnostics expose this stage as `selection`; the
-historical `rerank` stream key is a compatibility alias for deterministic local
-candidate selection.
+not call an LLM here. Diagnostics expose this stage as `selection`; it records
+candidate survival reasons and does not apply metadata bonus/penalty scoring.
 
 Current local selection diagnostics include exact token overlap, entity overlap,
 same-session matches, normalized time-token matches, correction/staleness
@@ -328,7 +323,7 @@ stream champions. Raw refs are preserved separately from injected text.
 
 ### 6. LCM Compaction Off the Critical Path
 
-LCM compaction is allowed to use a sub-agent, but it should not block every user
+LCM compaction is allowed to use a sub-agent only when explicitly requested, and it should not block every user
 question unless context is actually over budget.
 
 Target behavior:
@@ -609,7 +604,7 @@ MemoryForge is beyond Agentic RAG when:
 
 - The active core model answers with MemoryForge context.
 - LTM does not generate answers.
-- RLM and LCM sub-agents are bounded internal workers.
+- RLM host subagents are coordinated by the active Codex host; LCM sub-agents are explicit-only bounded workers.
 - Memory is durable, typed, corrected, and provenance-aware.
 - The system recalls useful context proactively, not only by query string.
 - It improves across sessions and user corrections.

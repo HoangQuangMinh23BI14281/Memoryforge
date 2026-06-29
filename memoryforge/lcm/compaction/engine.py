@@ -67,7 +67,7 @@ class LCMCompactionEngine:
         compactor: LCMCompactor | None = None,
         event_bus: EventBus | None = None,
         estimator: TokenEstimator | None = None,
-        runner: str | None = "auto",
+        runner: str | None = None,
         model: str | None = None,
         project_root: str | None = None,
         base_url: str | None = None,
@@ -75,15 +75,19 @@ class LCMCompactionEngine:
     ):
         self.store = store or ImmutableMessageStore(db_path)
         self.dag = dag or SummaryDAG(db_path)
-        self.compactor = compactor or LCMCompactor(
+        worker_requested = any(value is not None for value in (runner, model, base_url))
+        provider = (
             SubAgentLCMProvider(
-                runner=runner,
+                runner=runner or "auto",
                 model=model,
                 project_root=project_root,
                 base_url=base_url,
                 timeout_s=timeout_s,
             )
+            if worker_requested
+            else None
         )
+        self.compactor = compactor or LCMCompactor(provider)
         self.event_bus = event_bus or EventBus(db_path)
         self.estimator = estimator or TokenEstimator(heuristic_only=True)
         self.builder = ContextBuilder(self.store, self.dag, estimator=self.estimator)

@@ -49,6 +49,13 @@ class RLMFacadeMixin:
         max_recursive_rounds: int = 2,
         recursive_token_limit: int | None = None,
     ) -> dict[str, Any]:
+        """Load and index RLM chunks without running sub-agent analysis.
+
+        Use ``memoryforge index --analyze`` for host-subagent analysis plans.
+        Keeping load/index separate prevents surprise worker calls during init,
+        MCP recall, and hook/bootstrap flows.
+        """
+
         result = self.rlm.load(
             agent_id=agent_id,
             value=value,
@@ -63,41 +70,23 @@ class RLMFacadeMixin:
             max_workers, "MEMORYFORGE_RLM_MAX_WORKERS", default=1
         )
         chunk_count = int(result.get("chunk_count") or 0)
-        if rlm_deduped:
-            result["rlm_worker"] = {
-                "enabled": True,
-                "skipped": "deduped_existing_buffer",
-                "batch_size": _effective_batch_size(configured_batch_size, chunk_count),
-                "max_workers": resolved_max_workers,
-            }
-        elif chunk_count > 0:
-            worker_result = self.rlm.run(
-                agent_id=agent_id,
-                buffer_id=str(result["buffer_id"]),
-                query=None,
-                limit=chunk_count,
-                batch_size=configured_batch_size,
-                runner=runner,
-                model=model,
-                base_url=base_url,
-                project_root=project_root,
-                timeout_s=timeout_s,
-                max_workers=resolved_max_workers,
-                max_retries=max_retries,
-                allow_partial=allow_partial,
-                synthesize=synthesize,
-                recursive=recursive,
-                max_recursive_rounds=max_recursive_rounds,
-                recursive_token_limit=recursive_token_limit,
-            )
-            result["rlm_worker"] = _worker_manifest(worker_result)
-        else:
-            result["rlm_worker"] = {
-                "enabled": True,
-                "skipped": "empty_buffer",
-                "batch_size": _effective_batch_size(configured_batch_size, chunk_count),
-                "max_workers": resolved_max_workers,
-            }
+        result["rlm_worker"] = {
+            "enabled": False,
+            "skipped": "rlm_load_indexing_only",
+            "batch_size": _effective_batch_size(configured_batch_size, chunk_count),
+            "max_workers": resolved_max_workers,
+            "runner": runner,
+            "model": model,
+            "base_url_configured": bool(base_url),
+            "project_root": project_root,
+            "timeout_s": timeout_s,
+            "max_retries": max_retries,
+            "allow_partial": allow_partial,
+            "synthesize": synthesize,
+            "recursive": recursive,
+            "max_recursive_rounds": max_recursive_rounds,
+            "recursive_token_limit": recursive_token_limit,
+        }
         self._index_rlm_load_result(
             agent_id=agent_id,
             result=result,
@@ -252,11 +241,18 @@ class RLMFacadeMixin:
         agent_id: str,
         run_id: str,
         summary: str | None = None,
+        expected_batch_count: int | None = None,
     ) -> dict[str, Any]:
         engine, owned = self._rlm_existing()
         try:
             return cast(
-                dict[str, Any], engine.aggregate(agent_id=agent_id, run_id=run_id, summary=summary)
+                dict[str, Any],
+                engine.aggregate(
+                    agent_id=agent_id,
+                    run_id=run_id,
+                    summary=summary,
+                    expected_batch_count=expected_batch_count,
+                ),
             )
         finally:
             if owned:
@@ -325,6 +321,10 @@ class RLMFacadeMixin:
         if not indexed_item_ids and buffer_id:
             indexed_item_ids.extend(self.long_term.index_rlm_buffer(agent_id, str(buffer_id)))
         result["long_term_item_ids"] = indexed_item_ids
+        result["worker_long_term_item_ids"] = self.long_term.index_rlm_worker_result(
+            agent_id,
+            result,
+        )
         return cast(dict[str, Any], result)
 
 
@@ -357,22 +357,3 @@ def _effective_batch_size(batch_size: int | None, chunk_count: int) -> int:
     return max(1, batch_size)
 
 
-def _worker_manifest(worker_result: dict[str, Any]) -> dict[str, Any]:
-    plan = worker_result.get("plan")
-    records = worker_result.get("records")
-    failures = worker_result.get("failures")
-    return {
-        "enabled": True,
-        "runner": worker_result.get("runner"),
-        "model": worker_result.get("model"),
-        "batch_size": plan.get("batch_size") if isinstance(plan, dict) else None,
-        "batch_count": plan.get("batch_count") if isinstance(plan, dict) else None,
-        "max_workers": plan.get("max_workers") if isinstance(plan, dict) else None,
-        "max_retries": plan.get("max_retries") if isinstance(plan, dict) else None,
-        "allow_partial": plan.get("allow_partial") if isinstance(plan, dict) else None,
-        "record_count": len(records) if isinstance(records, list) else 0,
-        "failure_count": len(failures) if isinstance(failures, list) else 0,
-        "run_metrics": worker_result.get("run_metrics"),
-        "recursion": worker_result.get("recursion"),
-        "lossless": bool(worker_result.get("lossless", True)),
-    }

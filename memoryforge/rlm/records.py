@@ -37,8 +37,28 @@ class RLMRecordMixin:
 
         if not chunk_ids:
             raise ValueError("chunk_ids cannot be empty")
+        if batch_index is not None:
+            existing = self._analysis_for_batch(agent_id, run_id, batch_index)
+            if existing is not None:
+                return {
+                    "analysis_id": existing["analysis_id"],
+                    "run_id": run_id,
+                    "message_id": existing["message_id"],
+                    "summary_node_id": existing["summary_node_id"],
+                    "chunk_ids": existing["chunk_ids"],
+                    "source_refs": self._chunk_refs(existing["chunk_ids"]),
+                    "analysis": existing["analysis"],
+                    "metadata": {"batch_index": batch_index, **(metadata or {})},
+                    "lossless": True,
+                    "idempotent": True,
+                }
         analysis_id = new_id("rana")
-        node_content = self._analysis_node_text(run_id, chunk_ids, analysis)
+        node_content = self._analysis_node_text(
+            run_id,
+            chunk_ids,
+            analysis,
+            batch_index=batch_index,
+        )
         source_refs = self._chunk_refs(chunk_ids)
         message_id = self._lcm_message_store().append_text_message(
             agent_id=agent_id,
@@ -60,6 +80,7 @@ class RLMRecordMixin:
             "summary_node_id": summary_node_id,
             "chunk_ids": chunk_ids,
             "source_refs": source_refs,
+            "analysis": analysis.strip(),
             "metadata": {"batch_index": batch_index, **(metadata or {})},
             "lossless": True,
         }
@@ -71,12 +92,15 @@ class RLMRecordMixin:
         *,
         summary: str | None = None,
         metadata: dict[str, Any] | None = None,
+        expected_batch_count: int | None = None,
     ) -> dict[str, Any]:
         """Create an LCM SummaryDAG parent over recorded RLM analysis leaves."""
 
         analyses = self._analyses_for_run(agent_id, run_id)
         if not analyses:
             raise ValueError(f"No RLM analyses found for run_id={run_id}")
+        if expected_batch_count is not None:
+            _validate_expected_batches(analyses, expected_batch_count)
 
         child_node_ids = [item["summary_node_id"] for item in analyses]
         source_chunk_ids = dedupe([chunk_id for item in analyses for chunk_id in item["chunk_ids"]])
@@ -237,6 +261,17 @@ class RLMRecordMixin:
         self._summary_dag().conn.commit()
         return node_id
 
+    def _analysis_for_batch(
+        self,
+        agent_id: str,
+        run_id: str,
+        batch_index: int,
+    ) -> dict[str, Any] | None:
+        for item in self._analyses_for_run(agent_id, run_id):
+            if item["batch_index"] == batch_index:
+                return item
+        return None
+
     def _analyses_for_run(self, agent_id: str, run_id: str) -> list[dict[str, Any]]:
         rows = (
             self._summary_dag()
@@ -261,17 +296,22 @@ class RLMRecordMixin:
             ]
             if not chunk_ids:
                 continue
+            content = str(row[2] or "")
+            batch_index = _batch_index_from_analysis_content(content)
+            if batch_index is None:
+                batch_index = len(analyses)
             analyses.append(
                 {
                     "analysis_id": str(row[0]),
-                    "batch_index": len(analyses),
+                    "batch_index": batch_index,
                     "chunk_ids": chunk_ids,
-                    "analysis": self._analysis_body(str(row[2] or "")),
+                    "analysis": self._analysis_body(content),
                     "message_id": str(row[1] or ""),
                     "summary_node_id": str(row[0]),
                     "metadata": {"agent_id": agent_id, "created_at": float(row[4] or 0)},
                 }
             )
+        analyses.sort(key=lambda item: int(item["batch_index"]))
         return analyses
 
     @staticmethod
@@ -279,10 +319,18 @@ class RLMRecordMixin:
         return [f"rlm_chunk:{chunk_id}" for chunk_id in chunk_ids]
 
     @staticmethod
-    def _analysis_node_text(run_id: str, chunk_ids: list[str], analysis: str) -> str:
+    def _analysis_node_text(
+        run_id: str,
+        chunk_ids: list[str],
+        analysis: str,
+        *,
+        batch_index: int | None = None,
+    ) -> str:
+        batch_line = f"Batch index: {batch_index}\n" if batch_index is not None else ""
         return (
             "# RLM Sub-Agent Analysis\n\n"
             f"Run: {run_id}\n"
+            f"{batch_line}"
             f"Chunks: {', '.join(f'rlm_chunk:{chunk_id}' for chunk_id in chunk_ids)}\n\n"
             f"{analysis.strip()}"
         )
@@ -312,3 +360,41 @@ class RLMRecordMixin:
                 f"## Batch {item['batch_index']} — {chunks}\n\n{item['analysis'].strip()}\n"
             )
         return "\n".join(sections).strip()
+
+
+def _batch_index_from_analysis_content(content: str) -> int | None:
+    for line in content.splitlines()[:8]:
+        key, separator, value = line.partition(":")
+        if separator and key.strip().lower() == "batch index":
+            try:
+                return int(value.strip())
+            except ValueError:
+                return None
+    return None
+
+
+def _validate_expected_batches(analyses: list[dict[str, Any]], expected_batch_count: int) -> None:
+    if expected_batch_count < 0:
+        raise ValueError("expected_batch_count cannot be negative")
+    seen: set[int] = set()
+    duplicates: set[int] = set()
+    for item in analyses:
+        batch_index = int(item["batch_index"])
+        if batch_index in seen:
+            duplicates.add(batch_index)
+        seen.add(batch_index)
+    expected = set(range(expected_batch_count))
+    missing = sorted(expected - seen)
+    extra = sorted(index for index in seen if index >= expected_batch_count)
+    if missing or duplicates or extra:
+        details = []
+        if missing:
+            details.append(f"missing batches {missing}")
+        if duplicates:
+            details.append(f"duplicate batches {sorted(duplicates)}")
+        if extra:
+            details.append(f"unexpected batches {extra}")
+        raise ValueError(
+            f"RLM aggregate incomplete for expected_batch_count={expected_batch_count}: "
+            + "; ".join(details)
+        )

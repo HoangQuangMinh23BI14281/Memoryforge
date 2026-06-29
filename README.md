@@ -1,19 +1,18 @@
 # MemoryForge
 
-MemoryForge is an MCP-first, local-first memory layer for Codex CLI workflows.
+MemoryForge is a Codex-CLI-first, local-first memory layer for long-running
+LLM workflows.
 
 It stores durable project evidence in SQLite, keeps live context bounded, and
-returns source-backed context bundles to the model the user is already running.
-MemoryForge is not a separate answering agent and it is not a codebase AST graph
-engine. The host model answers; MemoryForge supplies memory, references, and
-provenance.
+returns source-backed context bundles to the model or agent the user is already
+running. For Codex CLI usage on Linux/WSL, the project-local hook runner is the
+required LCM auto-capture path. Codex MCP remains deliberately small and exposes
+only hot-path recall/context plus the RLM analysis planner.
 
 ```text
-User -> Codex CLI -> MemoryForge MCP -> SQLite memory.db
-                         |
-                         +-> bounded CoreContextBundle
-                         +-> RLM/LTM retrieval
-                         +-> optional LCM compaction
+Codex CLI -> WSL/Linux hook runner -> same SQLite memory.db
+Codex CLI -> MemoryForge MCP      -> recall/context/index_analyze
+Codex host subagents             -> fetch chunks -> record -> aggregate
 ```
 
 ## What It Is For
@@ -28,7 +27,9 @@ workflows but too large or noisy to paste into every prompt:
 - large Markdown files used while "vibe coding" or building a project over many sessions
 
 These sources are ingested through RLM, stored as durable LTM evidence, and
-recalled as bounded context when Codex needs them.
+recalled as bounded context when Codex needs them. The shallow path is the RLM
+sub-agent analysis/summary stored in LTM; the deep path remains the lossless
+`rlm_chunk:<id>` content that can be rehydrated on demand.
 
 MemoryForge intentionally avoids a large AST/code graph schema in the core
 release. The default auto-load path targets Markdown project knowledge
@@ -40,21 +41,22 @@ of the current SQLite schema.
 
 | Layer | Role | Model worker use |
 | --- | --- | --- |
-| RLM | Raw Large Memory. Chunks large files/prompts and indexes them into durable memory. | Optional, for batch analysis. |
+| RLM | Raw Large Memory. Chunks large files/prompts, prepares host-subagent analysis plans, and indexes both derived summaries and full chunks into durable memory. | Host agent/subagent executes the returned plan. |
 | LTM | Long-Term Memory. Recalls durable evidence across sessions and sources. | No model call. |
-| LCM | Lossless Context Management Keeps the active session view bounded with summaries and refs. | Optional, for compaction. |
+| LCM | Lossless Context Management. Keeps the MemoryForge active-session view bounded with summaries, raw refs, and recoverable tool-output parts. | WSL/Linux hook runner captures Codex CLI lifecycle; optional explicit compaction worker. |
 
 Important boundary: LCM compacts MemoryForge's SQLite-backed active context. It
 does not directly erase Codex's own context window. Codex manages its live
-thread and can compact it with `/compact`; MemoryForge MCP tools then help
-preserve and rehydrate the evidence needed after compaction.
+thread and can compact it with `/compact`; MemoryForge MCP tools and the
+WSL/Linux hook runner preserve and rehydrate the evidence needed after
+compaction.
 
 ## Install
 
 From PyPI in a project that uses `uv`:
 
 ```bash
-uv add memfg==6.1.1
+uv add memfg==6.1.5
 ```
 
 MemoryForge defaults to lexical BM25/FTS recall so first run stays responsive on
@@ -67,12 +69,12 @@ For local development from this repository:
 uv sync --extra dev --extra benchmark
 ```
 
-## PyPI 6.1.1 Post-Publish Smoke Test
+## PyPI 6.1.5 Post-Publish Smoke Test
 
 After publishing:
 
 ```bash
-uv run twine upload dist/memfg-6.1.1*
+uvx --from twine twine upload dist/memfg-6.1.5*
 ```
 
 use a clean project to verify the package from PyPI. The flow below is written
@@ -90,7 +92,7 @@ uv init --bare --name memoryforge-pypi-smoke .
 2. Install the freshly published PyPI package:
 
 ```powershell
-uv add memfg==6.1.1
+uv add memfg==6.1.5
 uv run memoryforge --help
 ```
 
@@ -115,7 +117,7 @@ the `codex mcp add` command. Restart Codex after changing MCP registration.
 uv run memoryforge init . --agent-id codex --force
 ```
 
-Expected behavior for `6.1.1`:
+Expected behavior for `6.1.5`:
 
 - The command exits by itself.
 - `.memoryforge\memory.db` is created.
@@ -141,20 +143,22 @@ The old endpoint https://telemetry.old.example.com/ingest was rejected because i
 '@ | Set-Content -Encoding UTF8 docs\telemetry.md
 ```
 
-6. Index the Markdown file. For a direct CLI smoke test:
+6. Index the Markdown files. The default path is fast raw chunk/LTM indexing and
+does not call Codex sub-agents:
 
 ```powershell
-uv run memoryforge --db .memoryforge\memory.db ingest-file docs\telemetry.md --agent-id codex
+uv run memoryforge index . `
+  --agent-id codex `
+  --max-files 1 `
+  --force
 ```
 
-For a project-wide Markdown refresh instead, use:
+For RLM sub-agent analysis, do not leave Codex to run a separate CLI command.
+Start Codex and ask it to use MCP `index_analyze`; the returned
+`host_subagent_prompt` values are the host-subagent tasks.
 
-```powershell
-uv run memoryforge init . --agent-id codex --force --index
-```
-
-or ask Codex to call the MCP `autoload_markdown` tool after the MCP server is
-registered.
+`init --index` remains accepted for compatibility, but the recommended command
+is `memoryforge index`.
 
 7. Verify recall without Codex:
 
@@ -168,7 +172,19 @@ uv run memoryforge --db .memoryforge\memory.db recall-memory `
 The output should include `https://telemetry.facilities.example.com/v2/ingest`
 and the rejection reason about tenant isolation and TLS pinning.
 
-8. Verify recall through Codex MCP. Start Codex from the same project directory:
+8. Install and trust the Codex lifecycle hook from WSL/Linux if you want LCM to
+capture interactive Codex turns:
+
+```bash
+uv run memoryforge init . --agent-id codex --force --install-hooks
+codex
+```
+
+Inside Codex, run `/hooks` and trust the MemoryForge project-local hooks. Without
+this trust step, LCM capture is unavailable for the Codex session.
+
+9. Optional: verify recall and RLM planning through Codex MCP. Start Codex from
+the same project directory:
 
 ```powershell
 codex
@@ -193,7 +209,81 @@ If Codex does not call MemoryForge, ask explicitly:
 Use MemoryForge MCP recall_memory first. What is the telemetry ingress endpoint used by facilities, and why was the old value rejected?
 ```
 
-9. Optional semantic vector recall. Leave this off for the first smoke test. To
+To make Codex prepare RLM host-subagent work from inside the active session, ask:
+
+```text
+Use MemoryForge MCP index_analyze for this project with analyze_min_bytes=20000 and analyze_max_files=5, then dispatch the returned host_subagent_prompt batches.
+```
+
+10. Verify LCM lifecycle capture for Codex interactive mode. Use WSL/Linux
+rather than native PowerShell hooks:
+
+```bash
+uv run memoryforge init . --agent-id codex --force --install-hooks
+```
+
+Expected files:
+
+```text
+.codex/hooks.json
+.memoryforge/hooks/memoryforge-hook.sh
+.memoryforge/hooks/memoryforge-hook.log
+```
+
+Restart Codex from the same WSL/Linux project directory:
+
+```bash
+codex
+```
+
+Then run `/hooks` in Codex and trust the MemoryForge hook definitions. Codex
+requires this review for project-local command hooks. The MemoryForge hook is
+intentionally small: it calls `python -m memoryforge.cli.main hook ...` through
+the project Python when available, uses `uv run --no-sync` as a fallback, and
+has a 30 second timeout. It does not call `codex`, does not start a model
+worker, does not use the Codex account/token, does not sync/reinstall the
+project, and does not index the whole project on startup unless
+`MEMORYFORGE_HOOK_AUTO_INDEX=1` is set. Diagnostics go to
+`.memoryforge/hooks/memoryforge-hook.log`.
+
+If you previously installed hooks with an older MemoryForge build and Codex
+shows `SessionStart hook (failed)` or `UserPromptSubmit hook (failed)`, remove
+the old native Windows hook files and regenerate from WSL/Linux:
+
+```bash
+uv run memoryforge init . --agent-id codex --force --install-hooks
+```
+
+Then reopen Codex from WSL/Linux and trust the hooks again with `/hooks`.
+
+The hook path listens for:
+
+- `SessionStart`: cleans stale pending hook files. It does not auto-index Markdown by default.
+- `UserPromptSubmit`: stores the pending user prompt and records an LCM context snapshot.
+- `PostToolUse`: stores tool output as an assistant message with a `tool` part when Codex supplies tool output in the hook payload.
+- `Stop`: commits the completed turn; if Codex supplies assistant output, it stores user + tool + assistant, otherwise it still commits the user prompt so the session is not empty.
+- `PreCompact` and `PostCompact`: record context snapshots around Codex `/compact`; `PostCompact` also stores a compact summary if Codex supplies one.
+
+Ask Codex one real question, then inspect the MemoryForge LCM database:
+
+```powershell
+uv run memoryforge --db .memoryforge\memory.db lcm-sessions `
+  --agent-id codex
+
+uv run memoryforge --db .memoryforge\memory.db lcm-messages `
+  --session-id <session-id-from-lcm-sessions> `
+  --agent-id codex `
+  --include-content
+
+uv run memoryforge --db .memoryforge\memory.db lcm-context `
+  --session-id <session-id-from-lcm-sessions>
+```
+
+If `lcm-sessions` shows `message_count: 0`, the hook was not trusted, Codex was
+not restarted after installing hooks, or Codex did not run from the initialized
+project directory.
+
+11. Optional semantic vector recall. Leave this off for the first smoke test. To
 enable FastEmbed later, set the environment before indexing and before starting
 Codex:
 
@@ -202,12 +292,12 @@ $env:MEMORYFORGE_VECTOR_BACKEND='fastembed'
 $env:MEMORYFORGE_VECTOR_MODEL='BAAI/bge-small-en-v1.5'
 ```
 
-Without those variables, `6.1.1` uses lexical BM25/FTS recall by default so
+Without those variables, `6.1.5` uses lexical BM25/FTS recall by default so
 first run stays responsive on Windows and offline machines.
 
-## Initialize A Codex Project
+## Optional Codex MCP Adapter
 
-First register the MemoryForge MCP server with Codex CLI. This uses Codex's own MCP manager instead of MemoryForge writing `.codex/config.toml`:
+For Codex CLI recall/context tools, register the MemoryForge MCP server:
 
 ```bash
 codex mcp add memoryforge -- uv run memoryforge-mcp
@@ -236,23 +326,63 @@ MemoryForge instruction block:
 <!-- MemoryForge instructions end -->
 ```
 
-MemoryForge no longer creates project-local `.codex/` files and does not install Codex hooks. It also does not call Codex CLI subprocesses unless you pass `--configure-codex`. The default workflow is MCP/tool-first:
+MemoryForge does not create project-local `.codex/` files or install Codex
+hooks unless `--install-hooks` is requested. It also does not call Codex CLI
+subprocesses during init or project indexing. The MCP adapter intentionally
+exposes only the hot-path tools:
 
 - `recall_memory`: fast factual recall from durable RLM/LTM indexes
 - `build_context_bundle`: grounded LCM/LTM context assembly for the active model
-- `autoload_markdown`: explicit refresh for changed Markdown files
-- `ensure_project_memory`: lightweight project-state check; it does not auto-index unless explicitly requested
-- `rlm_load`, `rlm_search`, `rlm_chunk_get`, `rlm_run`: large-context RLM workflows, with `rlm_run` reserved for explicit sub-agent analysis
+- `index_analyze`: index Markdown and return host-subagent RLM analysis plans
 
-Init is intentionally lightweight by default. To index project Markdown during
-init, add `--index`, or run `autoload_markdown` from MCP after startup.
-`AGENTS.md` itself is skipped during autoload so instructions do not pollute
-project memory.
+LCM completed-turn capture is not exposed through MCP. For Codex CLI, install
+and trust the WSL/Linux hook runner so lifecycle capture is continuous instead
+of relying on ad-hoc tool calls.
+
+`index_analyze` mirrors the internal RLM planner: it chunks/indexes selected
+Markdown files, writes raw `rlm_chunk:<id>` evidence into LTM, and returns
+`plans[].batches[].host_subagent_prompt` for the active Codex host to dispatch.
+It does not call a model or spawn `codex exec`.
+
+## WSL/Linux Hook Auto-Capture
+
+Use hooks when you need Codex interactive mode to auto-capture prompts, tool
+outputs, stop events, and compaction snapshots into LCM. For reliability, run
+Codex from WSL/Linux and install hooks there:
+
+```bash
+uv run memoryforge init . --agent-id codex --force --install-hooks
+```
+
+This creates `.codex/hooks.json` plus a tiny local runner:
+
+```text
+.memoryforge/hooks/memoryforge-hook.sh
+.memoryforge/hooks/memoryforge-hook.log
+```
+
+After restarting Codex from the same WSL/Linux project directory, run `/hooks`
+and trust the MemoryForge hook definitions. Without that trust step, Codex will
+skip project-local command hooks.
+
+The hook is intentionally local-only:
+
+- It calls `python -m memoryforge.cli.main hook ...`.
+- It does not call `codex`.
+- It does not call a model.
+- It does not run `codex exec`.
+- It does not depend on the active Codex account or OAuth token.
+- It exits `0` and writes diagnostics to `.memoryforge/hooks/memoryforge-hook.log`.
+
+LCM lifecycle capture is additive. RLM/LTM ingestion and recall keep working the
+same way; hooks only append active-session turns and context snapshots into the
+LCM tables.
+
 ## Basic Usage
 
-Default project usage is through Codex + MCP after `memoryforge init`. The CLI
-commands below are the direct/manual surface when you want to run MemoryForge
-outside the normal Codex tool loop.
+Default Codex CLI usage is WSL/Linux hook lifecycle capture plus MCP recall,
+context, and RLM planning. The CLI commands below are the direct/manual surface
+for indexing, recall, context inspection, and maintenance.
 
 Ingest a long Markdown file or project document:
 
@@ -261,13 +391,43 @@ uv run memoryforge --db .memoryforge/memory.db ingest-file docs/notes.md \
   --agent-id codex
 ```
 
-Load a large source through RLM:
+Index project Markdown quickly:
 
 ```bash
-uv run memoryforge --db .memoryforge/memory.db rlm-load docs/design.md \
-  --agent-id codex \
-  --name design-notes
+uv run memoryforge index . \
+  --agent-id codex
 ```
+
+Run RLM analysis only for large Markdown files from inside Codex through MCP:
+
+```text
+Use MemoryForge MCP index_analyze for this project with analyze_min_bytes=20000 and analyze_max_files=5, then dispatch the returned host_subagent_prompt batches.
+```
+
+MCP `index_analyze` does not spawn `codex exec` or any external model process.
+It returns `plans[]` with:
+
+- `host_subagent_prompt`: prompt for the active Codex host to give to a subagent
+- `fetch_command_argvs`: exact chunk fetch commands
+- `record_command_argv`: exact command to record that batch analysis
+- `aggregate_command_argv`: final aggregation command with `--expected-batches`
+
+The intended flow inside Codex is:
+
+1. Call MCP `memoryforge.index_analyze`.
+2. For each returned batch, spawn a Codex host subagent using `host_subagent_prompt`.
+3. Each subagent fetches only its chunks and writes a concise cited analysis.
+4. Record each analysis with the returned `record_command_argv`.
+5. Run `aggregate_command_argv` after all planned batches are recorded.
+
+For targeted/debug usage, `rlm-run` still exists as a legacy advanced CLI
+command, but it is not the primary indexing path and is intentionally omitted
+from the quickstart. Prefer MCP `index_analyze` plus host subagents.
+
+The primary `index` path chunks sources losslessly and stores exact
+`rlm_chunk:<id>` refs for deep rehydration. MCP `index_analyze` prepares
+host-subagent analysis work and stores `rlm_analysis`/`rlm_summary` rows in LTM
+after the returned record/aggregate commands are run.
 
 Recall durable evidence:
 
@@ -295,6 +455,21 @@ uv run memoryforge --db .memoryforge/memory.db lcm-compact \
   --session-id session-1 \
   --project-root . \
   --force
+```
+
+Inspect the active LCM state before or after compaction:
+
+```bash
+uv run memoryforge --db .memoryforge/memory.db lcm-sessions \
+  --agent-id codex
+
+uv run memoryforge --db .memoryforge/memory.db lcm-messages \
+  --session-id session-1 \
+  --agent-id codex \
+  --include-content
+
+uv run memoryforge --db .memoryforge/memory.db lcm-summary \
+  --session-id session-1
 ```
 
 Run the MCP server directly:
@@ -329,15 +504,18 @@ Public commands:
 - Project/runtime: `init`, `mcp-server`, `runtime-context`
 - Conversation memory: `store-session`, `search`, `recall-memory`, `active-recall`, `long-term-source`
 - Contradictions: `record-contradiction`, `find-contradictions`
-- LCM: `lcm-context`, `lcm-compact`, `lcm-maintain`
+- LCM: `lcm-context`, `lcm-sessions`, `lcm-messages`, `lcm-summary`, `lcm-compact`, `lcm-maintain`
 - RLM/source loading: `ingest-file`, `rlm-load`, `rlm-search`, `rlm-chunk-get`, `dispatch`, `context-get`, `rlm-record`, `aggregate`, `rlm-run`
 - Diagnostics: `chunk`, `benchmark`
 
+MCP intentionally exposes only `recall_memory`, `build_context_bundle`, and
+`index_analyze`. Low-level RLM/debug commands stay on the CLI so their schemas
+are not injected into every Codex turn.
+
 `memoryforge hook` remains available as an internal endpoint for direct testing.
-RLM/LCM sub-agents are internal MemoryForge workers. For real worker runs,
-MemoryForge uses Codex CLI through `codex exec` when configured. Development-time
-Codex host subagents are separate review/triage helpers and are not the
-MemoryForge runtime worker API.
+RLM host-subagent analysis is coordinated by MCP `index_analyze`: the active
+Codex host owns subagent execution, while MemoryForge owns chunk storage,
+record, aggregate, and recall.
 
 ## Benchmarks
 
