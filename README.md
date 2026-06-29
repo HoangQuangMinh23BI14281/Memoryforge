@@ -41,7 +41,7 @@ of the current SQLite schema.
 
 | Layer | Role | Model worker use |
 | --- | --- | --- |
-| RLM | Raw Large Memory. Chunks large files/prompts, prepares host-subagent analysis plans, and indexes both derived summaries and full chunks into durable memory. | Host agent/subagent executes the returned plan. |
+| RLM | Recursive language model. Chunks large files/prompts, prepares host-subagent analysis plans, and indexes both derived summaries and full chunks into durable memory. | Host agent/subagent executes the returned plan. |
 | LTM | Long-Term Memory. Recalls durable evidence across sessions and sources. | No model call. |
 | LCM | Lossless Context Management. Keeps the MemoryForge active-session view bounded with summaries, raw refs, and recoverable tool-output parts. | WSL/Linux hook runner captures Codex CLI lifecycle; optional explicit compaction worker. |
 
